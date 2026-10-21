@@ -27,7 +27,7 @@ export default function Preview({ item, vaultKey, onClose, onStep, onDownload }:
   useEffect(() => {
     let cancelled = false;
     let objectUrl = '';
-    setUrl(item.demoUrl || ''); setText(item.text || ''); setError(''); setScale(1); setPosition({ x: 0, y: 0 }); pointers.current.clear();
+    setUrl(item.demoUrl || ''); setText(item.text || ''); setError(''); setScale(1); setPosition({ x: 0, y: 0 }); pointers.current.clear(); lastDistance.current = 0;
     if (!item.demoUrl && item.kind !== 'note' && !sampleDocument && vaultKey && (isPhoto || isPdf || isText)) {
       setBusy(true);
       downloadVaultFile(vaultKey, item).then(async blob => {
@@ -61,9 +61,15 @@ export default function Preview({ item, vaultKey, onClose, onStep, onDownload }:
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       const distance = Math.hypot(a.x - b.x, a.y - b.y);
-      if (lastDistance.current) setScale(value => Math.min(5, Math.max(0.5, value * distance / lastDistance.current)));
+      // Capture the ratio before advancing the ref: React may run the updater later.
+      const ratio = lastDistance.current ? distance / lastDistance.current : 1;
+      setScale(value => Math.min(5, Math.max(0.5, value * ratio)));
       lastDistance.current = distance;
     } else setPosition(value => ({ x: value.x + event.clientX - previous.x, y: value.y + event.clientY - previous.y }));
+  };
+  const pointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    pointers.current.delete(event.pointerId);
+    lastDistance.current = 0;
   };
 
   return <dialog ref={dialog} className="preview-dialog" onCancel={event => { event.preventDefault(); onClose(); }} aria-label={`Preview ${item.name}`} onKeyDown={event => {
@@ -72,11 +78,11 @@ export default function Preview({ item, vaultKey, onClose, onStep, onDownload }:
   }}>
     <header className="preview-header"><div className="preview-file-icon"><FileText size={21} /></div><div><h2>{item.name}</h2><span>{formatBytes(item.size)} <i>·</i> {item.id.startsWith('demo-') ? 'Sample file' : 'Decrypted on your device'}</span></div><div className="preview-actions"><button className="icon-button" title="Download file" aria-label="Download file" onClick={() => onDownload(item)}><Download size={20} /></button><button className="icon-button" onClick={onClose} aria-label="Close preview"><X size={23} /></button></div></header>
     <div className={`preview-stage ${isPhoto ? 'photo-stage' : ''}`} onWheel={isPhoto ? event => zoom(scale + (event.deltaY < 0 ? 0.15 : -0.15)) : undefined}
-      onPointerDown={isPhoto ? pointerDown : undefined} onPointerMove={isPhoto ? pointerMove : undefined} onPointerUp={event => pointers.current.delete(event.pointerId)} onPointerCancel={event => pointers.current.delete(event.pointerId)} onDoubleClick={isPhoto ? () => { setScale(scale === 1 ? 2 : 1); setPosition({ x: 0, y: 0 }); } : undefined}>
+      onPointerDown={isPhoto ? pointerDown : undefined} onPointerMove={isPhoto ? pointerMove : undefined} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd} onDoubleClick={isPhoto ? () => { setScale(scale === 1 ? 2 : 1); setPosition({ x: 0, y: 0 }); } : undefined}>
       {busy ? <div className="preview-placeholder"><LoaderCircle className="spin" size={30} /><p>Decrypting your preview…</p></div> :
         error ? <div className="preview-placeholder"><LockKeyhole size={36} /><p>{error}</p></div> :
         isPhoto && url ? <img className="preview-photo" alt={item.name} draggable={false} src={url} style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` }} /> :
-        isPdf && url ? <Suspense fallback={<div className="preview-placeholder"><LoaderCircle className="spin" size={25} /><p>Opening your document…</p></div>}><PdfPreview url={url} name={item.name} /></Suspense> :
+        isPdf && url ? <Suspense fallback={<div className="preview-placeholder"><LoaderCircle className="spin" size={25} /><p>Opening your document…</p></div>}><PdfPreview key={url} url={url} name={item.name} /></Suspense> :
         sampleDocument ? <article className="sample-document"><div className="document-wordmark">haven<span> / personal archive</span></div><div className="document-tag">SAMPLE DOCUMENT</div><h1>{item.name.replace('.pdf', '')}</h1><p>A place for the details that matter.</p><hr /><h3>Your personal collection</h3><p>Keep important documents together and find them whenever you need them. In your connected vault, this preview is decrypted on your device.</p><div className="document-placeholder-lines"><i /><i /><i /><i /></div><div className="document-stamp"><LockKeyhole size={24} /><div>Only yours.<small>This is a fictional sample, with no personal data.</small></div></div></article> :
         isText ? <article className="text-preview"><div className="note-eyebrow">PRIVATE NOTE</div><h1>{item.name}</h1><pre>{text}</pre></article> :
         <div className="preview-placeholder"><FileText size={48} /><h3>This file is safely stored.</h3><p>Preview is available for photos, PDFs, and text files.<br />Download this file to open it in its usual app.</p><button className="button primary" onClick={() => onDownload(item)}><Download size={17} />Download file</button></div>}
