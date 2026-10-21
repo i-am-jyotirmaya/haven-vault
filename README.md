@@ -27,14 +27,22 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open **http://127.0.0.1:5173/?demo=1**. No Firebase account or environment file is required for the demo. It is not a local encrypted vault and does not persist your files. The normal sign-in flow requires your own configured Firebase backend.
+Open **http://127.0.0.1:5173/?demo=1**. No Firebase account or environment file is required for the demo. It is not a local encrypted vault and does not persist your files. To test the real encrypted vault without deploying infrastructure, use the local Firebase emulators:
+
+```sh
+npm --prefix functions ci
+pnpm dev:local
+```
+
+Requires Java 21+ in addition to Node/pnpm. Open **http://localhost:5173**, enroll the synthetic owner `owner@example.com`, and create a localhost passkey and test passphrase. See [local development](docs/LOCAL_DEVELOPMENT.md) for setup, test data, persistence/reset, and automated integration tests.
 
 ## Deploy your own vault
 
-Follow the [Firebase setup guide](docs/FIREBASE_SETUP.md). You need a dedicated Firebase project with Blaze billing, Firestore, Storage, Authentication, Hosting, and Cloud Functions. No production credentials or project binding are distributed. Changing frontend variables alone does not configure the security backend.
+Follow the [Firebase setup guide](docs/FIREBASE_SETUP.md). You need a dedicated Firebase project with Blaze billing, Firestore, Storage, Authentication, Hosting, and Cloud Functions. No production credentials or project binding are distributed. Changing frontend variables alone does not configure the security backend. Once configured, use `pnpm deploy:plan` to review the target and `pnpm deploy:cloud` to validate, deploy, and smoke check from your terminal. No pipeline is required.
 
 | Guide | Contents |
 | --- | --- |
+| [Local development](docs/LOCAL_DEVELOPMENT.md) | Full emulator stack, hot reload, encrypted tests, persistence/reset |
 | [Firebase setup](docs/FIREBASE_SETUP.md) | Installation, environment files, permissions, deployment, and first use |
 | [Architecture and integration](docs/ARCHITECTURE.md) | Modules, authentication, storage format, and customization |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Passkeys, permissions, CORS, and browser warnings |
@@ -74,7 +82,7 @@ pnpm test:rules
 pnpm build
 ```
 
-Rules tests require Java 21+ and download Firebase emulators on first use. They use the disposable demo-haven-vault project. The frontend does not automatically connect to emulators; see the integration guide.
+Rules tests require Java 21+ and download Firebase emulators on first use. They use the disposable demo-haven-vault project. Use `pnpm test:local` for the complete disposable emulator integration suite; `pnpm dev:local` connects the frontend automatically.
 
 Tests cover encryption, authentication lifecycle, backend policy, deployment configuration, and Firestore/Storage authorization. Verify real passkey enrollment and live encrypted upload/download on your own devices. Passing tests is not an independent security audit.
 

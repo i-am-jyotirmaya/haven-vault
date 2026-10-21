@@ -31,6 +31,7 @@ let current = 'authenticate';
       reachable = true;
     }
     console.log(JSON.stringify({ service, browserReachable: reachable }));
+    if (process.argv.includes('--check') && !reachable) process.exitCode = 1;
   }
 })().catch((error) => {
   console.error(JSON.stringify({ service: current, failed: true, status: error.status || null }));

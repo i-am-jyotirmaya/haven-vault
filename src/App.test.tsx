@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   key: {} as CryptoKey,
 }));
 vi.mock('./lib/firebase', () => ({
-  isFirebaseConfigured: true, isVaultBackendReady: true,
+  isFirebaseConfigured: true, isVaultBackendReady: true, isEmulatorMode: false,
   signInWithPasskey: mocks.signIn, enrollPasskey: mocks.enroll, signOutVault: mocks.signOut,
   validateVaultSession: mocks.validate,
   getVaultSessionDeadline: () => mocks.deadline,

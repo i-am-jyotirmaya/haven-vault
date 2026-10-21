@@ -61,7 +61,7 @@
           },
           {
             "key": "Content-Security-Policy",
-            "value": "default-src 'self'; script-src 'self' https://apis.google.com https://www.google.com https://www.gstatic.com https://www.recaptcha.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data:; connect-src 'self' https://*.googleapis.com https://*.cloudfunctions.net https://*.run.app https://*.firebaseio.com wss://*.firebaseio.com https://*.firebaseapp.com https://*.web.app; frame-src 'self' blob: https://*.firebaseapp.com https://*.web.app https://www.google.com https://www.recaptcha.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+            "value": "default-src 'self'; script-src 'self' https://apis.google.com https://www.google.com https://www.gstatic.com https://www.recaptcha.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data:; connect-src 'self' blob: https://*.googleapis.com https://*.cloudfunctions.net https://*.run.app https://*.firebaseio.com wss://*.firebaseio.com https://*.firebaseapp.com https://*.web.app; frame-src 'self' blob: https://*.firebaseapp.com https://*.web.app https://www.google.com https://www.recaptcha.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
           }
         ]
       }
@@ -69,23 +69,30 @@
   },
   "emulators": {
     "auth": {
-      "port": 9099
+      "port": 9099,
+      "host": "127.0.0.1"
     },
     "functions": {
-      "port": 5001
+      "port": 5001,
+      "host": "127.0.0.1"
     },
     "firestore": {
-      "port": 18080
+      "port": 18080,
+      "host": "127.0.0.1"
     },
     "storage": {
-      "port": 19199
+      "port": 19199,
+      "host": "127.0.0.1"
     },
     "hosting": {
-      "port": 5000
+      "port": 5000,
+      "host": "127.0.0.1"
     },
     "ui": {
       "enabled": true,
-      "port": 4000
-    }
+      "port": 4000,
+      "host": "127.0.0.1"
+    },
+    "singleProjectMode": true
   }
 }

@@ -9,7 +9,10 @@ const { serviceAccountHasRoles, addServiceAccountToRoles, getServiceAccountRoles
 const { project, projectNumber, bucket, origin, region } = require('./config.cjs').loadConfig();
 const apply = process.argv.includes('--apply');
 let step = 'authenticate';
-const report = (check, state) => console.log(JSON.stringify({ check, ...state }));
+const report = (check, state) => {
+  console.log(JSON.stringify({ check, ...state }));
+  if (process.argv.includes('--check') && Object.values(state).includes(false)) process.exitCode = 1;
+};
 const normalizeCors = (rules) => JSON.stringify(rules.map((rule) => ({
   origin: [...(rule.origin || [])].sort(),
   method: [...(rule.method || [])].sort(),

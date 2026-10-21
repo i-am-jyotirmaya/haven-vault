@@ -1,6 +1,7 @@
 import { initializeApp, getApps } from 'firebase/app'
 import {
   GoogleAuthProvider,
+  connectAuthEmulator,
   browserPopupRedirectResolver,
   initializeAuth,
   inMemoryPersistence,
@@ -8,12 +9,17 @@ import {
   signInWithPopup,
   signOut,
 } from 'firebase/auth'
-import { getFirestore } from 'firebase/firestore'
-import { getFunctions, httpsCallable } from 'firebase/functions'
-import { getStorage } from 'firebase/storage'
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
+import { connectFunctionsEmulator, getFunctions, httpsCallable } from 'firebase/functions'
+import { connectStorageEmulator, getStorage } from 'firebase/storage'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
+import { localFirebaseConfig, emulatorPorts } from './local-config'
 
-const firebaseConfig = {
+export const isEmulatorMode = import.meta.env.MODE === 'emulator'
+if (isEmulatorMode && (!import.meta.env.DEV || window.location.hostname !== 'localhost')) {
+  throw new Error('Emulator mode requires the local development server at localhost.')
+}
+const firebaseConfig = isEmulatorMode ? localFirebaseConfig : {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -26,7 +32,7 @@ export const isFirebaseConfigured = Object.values(firebaseConfig).every(
   (value) => typeof value === 'string' && value.trim().length > 0,
 )
 // A readiness indicator only; access control always remains server-enforced.
-export const isVaultBackendReady = isFirebaseConfigured && import.meta.env.VITE_VAULT_BACKEND_READY === 'true'
+export const isVaultBackendReady = isFirebaseConfigured && (isEmulatorMode || import.meta.env.VITE_VAULT_BACKEND_READY === 'true')
 
 const app = isFirebaseConfigured
   ? (getApps()[0] ?? initializeApp(firebaseConfig))
@@ -45,8 +51,17 @@ const auth = app
 export const db = app ? getFirestore(app) : null
 export const storage = app ? getStorage(app) : null
 const functions = app
-  ? getFunctions(app, import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1')
+  ? getFunctions(app, isEmulatorMode ? 'us-central1' : import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1')
   : null
+
+// Connect every service before any authentication, callable, or data request.
+// This mode uses a demo project even when .env.local contains production values.
+if (isEmulatorMode && auth && db && storage && functions) {
+  connectAuthEmulator(auth, `http://127.0.0.1:${emulatorPorts.auth}`)
+  connectFirestoreEmulator(db, '127.0.0.1', emulatorPorts.firestore)
+  connectStorageEmulator(storage, '127.0.0.1', emulatorPorts.storage)
+  connectFunctionsEmulator(functions, '127.0.0.1', emulatorPorts.functions)
+}
 
 // Keep the browser deadline inside the server's 15-minute session window.
 export const VAULT_SESSION_DURATION_MS = 14 * 60 * 1000 + 45 * 1000

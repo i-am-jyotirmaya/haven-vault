@@ -19,10 +19,12 @@ export default function PdfPreview({ url, name }: { url: string; name: string })
     let cancelled = false;
     const controller = new AbortController();
     let task: ReturnType<typeof getDocument> | undefined;
-    setBusy(true); setError(''); setPage(1);
+    setPdf(null); setBusy(true); setError(''); setPage(1); setZoom(1); setPageText('');
     void (async () => {
       // url is a private, short-lived object URL or an app-owned demo asset.
-      const bytes = new Uint8Array(await (await fetch(url, { signal: controller.signal })).arrayBuffer());
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error('Unable to load PDF');
+      const bytes = new Uint8Array(await response.arrayBuffer());
       if (cancelled) return;
       task = getDocument({ data: bytes, enableXfa: false, useSystemFonts: true, useWasm: false, maxImageSize: 16_000_000 });
       const document = await task.promise;
