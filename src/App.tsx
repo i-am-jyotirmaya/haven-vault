@@ -258,7 +258,7 @@ export default function App() {
     let idleTimer: ReturnType<typeof setTimeout>;
     const resetIdle = () => {
       clearTimeout(idleTimer);
-      if (stateRef.current.status === "unlocked") {
+      if (sessionDeadline(stateRef.current)) {
         idleTimer = setTimeout(() => lock("Your vault locked after 5 minutes of inactivity."), 5 * 60_000);
       }
     };

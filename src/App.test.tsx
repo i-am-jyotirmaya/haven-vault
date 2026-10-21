@@ -120,6 +120,15 @@ describe('authentication and local encryption transitions', () => {
     expect(mocks.signIn).toHaveBeenCalledOnce();
   });
 
+  it('inactivity also clears a passphrase draft on the authenticated lock screen', async () => {
+    render(<App />); await authenticate();
+    fireEvent.change(screen.getByLabelText('Your passphrase'), { target: { value: secret } });
+    act(() => vi.advanceTimersByTime(300_000));
+    expect(screen.getByLabelText('Your passphrase')).toHaveProperty('value', '');
+    expect(mocks.authenticated).toBe(true);
+    expect(mocks.signOut).not.toHaveBeenCalled();
+  });
+
   it('wrong passphrase stays authenticated and locked', async () => {
     render(<App />); await authenticate();
     mocks.unlock.mockRejectedValueOnce(new Error('Incorrect passphrase'));
