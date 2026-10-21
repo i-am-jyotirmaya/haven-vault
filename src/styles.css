@@ -385,3 +385,9 @@ i{font-style:normal}.stat-arrow{color:#aab3a2;stroke-width:1.3;width:16px}
 .collection-pill{font-size:9px}
 .collection-travel{color:#647d51}.collection-personal{color:#8d754d}.collection-work{color:#847193}
 @media(max-width:590px){.file-name{font-size:11px}.file-meta{font-size:9px}.category-tabs>button{font-size:10px}.files-heading p{font-size:10px}.welcome-copy p{font-size:11px}.pdf-toolbar{gap:5px;padding:5px 7px}.pdf-toolbar i{margin:0 3px}.pdf-toolbar span{font-size:9px}.collection-pill{font-size:8px}}
+
+/* Keep both explicit session actions reachable on narrow screens. */
+.topbar .breadcrumb{min-width:0}
+.topbar .breadcrumb strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar-actions{flex-shrink:0}
+@media(max-width:590px){.topbar-actions .session-status{display:none}}

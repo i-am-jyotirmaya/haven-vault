@@ -217,25 +217,47 @@ async function consumeChallenge(
   });
 }
 
-async function issueSession(uid: string): Promise<{ token: string }> {
+async function issueSession(uid: string): Promise<{ token: string; expiresAtMs: number; serverNowMs: number }> {
   const id = opaqueId();
   const ref = sessions.doc(id);
+  const expiresAtMs = Date.now() + SESSION_MS;
   await ref.create({
     uid,
     createdAt: Timestamp.now(),
-    expiresAt: Timestamp.fromMillis(Date.now() + SESSION_MS),
+    expiresAt: Timestamp.fromMillis(expiresAtMs),
     revoked: false,
   });
   try {
     // Never set persistent custom claims: every successful ceremony gets its own
     // expiring server-side session, independent of Firebase's refresh token.
     const token = await getAuth().createCustomToken(uid, { vaultAccess: true, vaultSession: id });
-    return { token };
+    return { token, expiresAtMs, serverNowMs: Date.now() };
   } catch {
     await ref.delete();
     throw new HttpsError("internal", "Could not start a vault session. Please try again.");
   }
 }
+
+/** Read-only check of the same owner/session policy enforced by data rules. */
+export const validateVaultSession = onCall(callableOptions, async (request) => {
+  checkApp(request);
+  const user = principal(request);
+  const id = claimSession(request);
+  if (!id) throw new HttpsError("unauthenticated", "A passkey vault session is required.");
+  return db.runTransaction(async (transaction) => {
+    const owner = await transaction.get(ownerRef);
+    const snapshot = await transaction.get(sessions.doc(id));
+    const data = snapshot.data();
+    const serverNowMs = Date.now();
+    const expiresAtMs = data?.expiresAt?.toMillis();
+    if (owner.data()?.uid !== user.uid || !validSession(data ? {
+      uid: data.uid, expiresAtMs, revoked: data.revoked,
+    } : undefined, user.uid, serverNowMs)) {
+      throw new HttpsError("permission-denied", "Your vault session has ended. Sign in again.");
+    }
+    return { expiresAtMs, serverNowMs };
+  });
+});
 
 export const vaultSessionInfo = onCall(callableOptions, async (request) => {
   const config = configured(request);

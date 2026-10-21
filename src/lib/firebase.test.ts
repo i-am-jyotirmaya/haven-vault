@@ -59,7 +59,8 @@ beforeEach(() => {
   mocks.signOut.mockImplementation(async () => { mocks.auth.currentUser = null; });
   mocks.call.mockImplementation(async (name: string) => {
     if (name === 'authenticationOptions' || name === 'registrationOptions') return { data: { options: {}, challengeId: 'challenge' } };
-    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token' } };
+    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: Date.now(), expiresAtMs: Date.now() + 900_000 } };
+    if (name === 'validateVaultSession') return { data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 } };
     return { data: { ended: true } };
   });
 });
@@ -141,7 +142,7 @@ describe('vault authentication lifecycle', () => {
     expect(mocks.signOut).toHaveBeenCalled();
   });
 
-  it('does not finish sign-in after locking during a passkey prompt', async () => {
+  it('does not finish sign-in after signing out during a passkey prompt', async () => {
     let finish!: (value: unknown) => void;
     mocks.authentication.mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const session = await import('./firebase');
@@ -155,7 +156,7 @@ describe('vault authentication lifecycle', () => {
     expect(() => session.getVaultUserId()).toThrow();
   });
 
-  it('clears a token that arrives after locking and prevents overlapping sign-ins', async () => {
+  it('clears a token that arrives after signing out and prevents overlapping sign-ins', async () => {
     let finish!: () => void;
     mocks.signIn.mockImplementation(() => new Promise(resolve => {
       finish = () => { mocks.auth.currentUser = mocks.user; resolve({ user: mocks.user }); };
@@ -190,6 +191,69 @@ describe('vault authentication lifecycle', () => {
     expect(mocks.auth.currentUser).toBeNull();
     expect(() => session.getVaultUserId()).toThrow();
   });
+  it('takes a conservative deadline from the server record and never extends it on validation', async () => {
+    let now = 10_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const session = await import('./firebase');
+    await session.signInWithPasskey();
+    const original = session.getVaultSessionDeadline();
+    now += 200_000;
+    await session.validateVaultSession();
+    expect(session.getVaultSessionDeadline()).toBe(original);
+    // The server's clock can differ; use its remaining lifetime, not an
+    // absolute timestamp compared with the client's wall clock.
+    mocks.call.mockResolvedValueOnce({ data: { serverNowMs: 5_000_000, expiresAtMs: 5_100_000 } });
+    await session.validateVaultSession();
+    expect(session.getVaultSessionDeadline()).toBe(now + 85_000);
+    await session.validateVaultSession();
+    expect(session.getVaultSessionDeadline()).toBe(now + 85_000);
+  });
+
+  it('does not give token-exchange latency a fresh full session window', async () => {
+    let now = 10_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mocks.signIn.mockImplementation(async () => {
+      now += 300_000; mocks.auth.currentUser = mocks.user; return { user: mocks.user };
+    });
+    const session = await import('./firebase');
+    await session.signInWithPasskey();
+    expect(session.getVaultSessionDeadline()).toBe(10_000 + session.VAULT_SESSION_DURATION_MS);
+  });
+
+  it('clears usable local authorization on confirmed server revocation, but not network errors', async () => {
+    const session = await import('./firebase');
+    await session.signInWithPasskey();
+    mocks.call.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'functions/unavailable' }));
+    await expect(session.validateVaultSession()).rejects.toThrow('offline');
+    expect(session.getVaultUserId()).toBe('owner');
+    mocks.call.mockRejectedValueOnce(Object.assign(new Error('revoked'), { code: 'functions/permission-denied' }));
+    await expect(session.validateVaultSession()).rejects.toThrow('revoked');
+    expect(() => session.getVaultUserId()).toThrow('ended');
+  });
+
+  it('reports failed remote revocation after clearing local authorization and Firebase', async () => {
+    const session = await import('./firebase');
+    await session.signInWithPasskey();
+    mocks.call.mockRejectedValueOnce(new Error('offline'));
+    const pending = session.signOutVault();
+    expect(() => session.getVaultUserId()).toThrow('ended');
+    await expect(pending).resolves.toEqual({ revoked: false });
+    expect(mocks.auth.currentUser).toBeNull();
+  });
+
+  it('does not accept session validation that finishes after sign-out', async () => {
+    const session = await import('./firebase');
+    await session.signInWithPasskey();
+    let finish!: (value: unknown) => void;
+    mocks.call.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const pending = session.validateVaultSession();
+    const rejected = expect(pending).rejects.toThrow('cancelled');
+    await session.signOutVault();
+    finish({ data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 900_000 } });
+    await rejected;
+    expect(() => session.getVaultUserId()).toThrow('ended');
+  });
+
 });
 
 

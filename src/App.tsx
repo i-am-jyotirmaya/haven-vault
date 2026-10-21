@@ -58,7 +58,10 @@ import {
   isVaultBackendReady,
   signInWithPasskey,
   signOutVault,
-  VAULT_SESSION_DURATION_MS,
+  getVaultSessionDeadline,
+  getVaultUserId,
+  isAuthenticationFailure,
+  validateVaultSession,
 } from "./lib/firebase";
 import {
   downloadVaultFile,
@@ -71,12 +74,13 @@ import {
   uploadVaultFile,
   MAX_FILE_SIZE,
 } from "./lib/vault";
+import { lockVaultState, sessionDeadline, type VaultState } from "./lib/vaultState";
+import { clearPlaintext, createPlaintextUrl, revokePlaintextUrl } from "./lib/plaintext";
 import Modal from "./components/Modal";
 import Preview from "./components/Preview";
 
 type Section = "My vault" | "Recent" | "Favorites" | "Trash" | "Security";
 type Category = "all" | "photo" | "document" | "note";
-type Screen = "login" | "unlock" | "create" | "vault";
 type ModalKind = "upload" | "note" | "collection" | "setup" | "help" | null;
 const isDemoPreview =
   new URLSearchParams(window.location.search).get("demo") === "1" || !isFirebaseConfigured;
@@ -133,8 +137,17 @@ function ArchIllustration() {
 }
 
 export default function App() {
-  const [demo, setDemo] = useState(isDemoPreview);
-  const [screen, setScreen] = useState<Screen>(isDemoPreview ? "vault" : "login");
+  const [vaultState, setVaultState] = useState<VaultState>(isDemoPreview ? { status: "demo" } : { status: "signed-out" });
+  const stateRef = useRef(vaultState);
+  const transition = useCallback((next: VaultState) => {
+    stateRef.current = next;
+    setVaultState(next);
+  }, []);
+  const demo = vaultState.status === "demo";
+  const screen = vaultState.status === "signed-out" ? "login"
+    : vaultState.status === "locked" ? (vaultState.config === null ? "create" : "unlock") : "vault";
+  const vaultKey = vaultState.status === "unlocked" ? vaultState.key : null;
+  const deadline = sessionDeadline(vaultState);
   const [items, setItems] = useState<DisplayItem[]>(isDemoPreview ? demoItems : []);
   const [section, setSection] = useState<Section>("My vault");
   const [category, setCategory] = useState<Category>("all");
@@ -158,18 +171,15 @@ export default function App() {
   const [confirmPassphrase, setConfirmPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [vaultConfig, setVaultConfig] = useState<VaultConfig | null>(null);
   const [noteTitle, setNoteTitle] = useState("");
   const [noteText, setNoteText] = useState("");
   const [newCollection, setNewCollection] = useState("");
   const [uploadCollection, setUploadCollection] = useState("Personal");
   const [dragging, setDragging] = useState(false);
-  const [sessionStarted, setSessionStarted] = useState(0);
-  const keyRef = useRef<CryptoKey | null>(null);
+  const authenticationGeneration = useRef(0);
   const generationRef = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
-  const downloadUrls = useRef(new Set<string>());
 
   const notify = useCallback((message: string) => setToast(message), []);
   useEffect(() => {
@@ -178,67 +188,115 @@ export default function App() {
       return () => clearTimeout(timeout);
     }
   }, [toast]);
-  const lock = useCallback(
-    (message = "") => {
-      generationRef.current++;
-      enrollmentAction.current?.cancel();
-      setEnrollmentStep(null);
-      keyRef.current = null;
-      setItems([]);
-      setPreviewId(null);
-      setModal(null);
-      setDeleteItem(null);
-      setMenuId(null);
-      setNoteText("");
-      setNoteTitle("");
-      setPassphrase("");
-      setConfirmPassphrase("");
-      setSearch("");
-      setCollections(["Personal", "Travel", "Work"]);
-      setCollection("");
-      setNewCollection("");
-      setUploadCollection("Personal");
-      setVaultConfig(null);
-      setSessionStarted(0);
-      setScreen("login");
-      setBusy(false);
-      setError("");
-      downloadUrls.current.forEach((url) => URL.revokeObjectURL(url));
-      downloadUrls.current.clear();
-      void signOutVault().catch(() => {});
-      if (message) notify(message);
-    },
-    [notify],
-  );
+  const clearSensitiveState = useCallback(() => {
+    generationRef.current++;
+    clearPlaintext();
+    setItems([]);
+    setPreviewId(null);
+    setModal(null);
+    setDeleteItem(null);
+    setMenuId(null);
+    setNoteText("");
+    setNoteTitle("");
+    setPassphrase("");
+    setConfirmPassphrase("");
+    setSearch("");
+    setCollections(["Personal", "Travel", "Work"]);
+    setCollection("");
+    setNewCollection("");
+    setUploadCollection("Personal");
+    setShowPassphrase(false);
+    setAcknowledged(false);
+    setProgress("");
+    setToast("");
+    setDragging(false);
+    setMobileNav(false);
+    setSection("My vault");
+    setCategory("all");
+    if (uploadRef.current) uploadRef.current.value = "";
+    setBusy(false);
+    setError("");
+  }, []);
+  const endSession = useCallback((message = "") => {
+    authenticationGeneration.current++;
+    enrollmentAction.current?.cancel();
+    setEnrollmentStep(null);
+    clearSensitiveState();
+    transition({ status: "signed-out" });
+    void signOutVault().then(({ revoked }) => {
+      if (!revoked && stateRef.current.status === "signed-out") {
+        notify("Signed out on this device. Remote revocation failed; the server session remains valid until its enforced expiry.");
+      }
+    });
+    if (message) notify(message);
+  }, [clearSensitiveState, transition, notify]);
+  const lock = useCallback((message = "") => {
+    // Locking invalidates encryption work only, never a passkey ceremony/session.
+    if (stateRef.current.status === "signed-out") return;
+    clearSensitiveState();
+    transition(lockVaultState(stateRef.current));
+    if (message) notify(message);
+  }, [clearSensitiveState, transition, notify]);
+  const handleVaultError = useCallback((err: unknown) => {
+    if (isAuthenticationFailure(err)) endSession("Your secure session ended. Sign in again.");
+    else setError(errorMessage(err));
+  }, [endSession]);
+  const workIsCurrent = (generation: number) => {
+    if (generation !== generationRef.current) return false;
+    if (stateRef.current.status === "demo") return true;
+    getVaultUserId(); // Check wall-clock expiry even after browser suspension.
+    return true;
+  };
 
+  // One absolute timer for the authentication lifetime, including time locked.
   useEffect(() => {
-    if (demo || !sessionStarted || screen === "login") return;
+    if (!deadline) return;
+    const timer = setTimeout(() => endSession("Your secure session ended. Sign in again."), Math.max(0, deadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [deadline, endSession]);
+  useEffect(() => {
+    if (!deadline) return;
     let idleTimer: ReturnType<typeof setTimeout>;
     const resetIdle = () => {
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(
-        () => lock("Your vault locked after 5 minutes of inactivity."),
-        5 * 60_000,
-      );
+      if (sessionDeadline(stateRef.current)) {
+        idleTimer = setTimeout(() => lock("Your vault locked after 5 minutes of inactivity."), 5 * 60_000);
+      }
     };
-    const absoluteTimer = setTimeout(
-      () => lock("Your secure session ended. Verify your passkey to continue."),
-      Math.max(0, sessionStarted + VAULT_SESSION_DURATION_MS - Date.now()),
-    );
-    const hidden = () => {
+    const resume = () => {
+      if (document.visibilityState !== "visible") return;
+      if (stateRef.current.status === "unlocked") lock();
+      const current = generationRef.current;
+      void validateVaultSession().then(() => {
+        if (current !== generationRef.current) return;
+        const state = stateRef.current;
+        if (state.status === "locked") transition({ ...state, expiresAt: Math.min(state.expiresAt, getVaultSessionDeadline()) });
+      }).catch(err => {
+        if (current === generationRef.current) handleVaultError(err);
+      });
+    };
+    const visibility = () => {
       if (document.visibilityState === "hidden") lock("Your vault locked when you left this tab.");
+      else resume();
+    };
+    const pageshow = (event: PageTransitionEvent) => {
+      if (event.persisted) lock();
+      resume();
     };
     const events = ["pointerdown", "keydown", "wheel"] as const;
-    events.forEach((event) => window.addEventListener(event, resetIdle, { passive: true }));
-    document.addEventListener("visibilitychange", hidden);
+    events.forEach(event => window.addEventListener(event, resetIdle, { passive: true }));
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", pageshow);
     resetIdle();
     return () => {
       clearTimeout(idleTimer);
-      clearTimeout(absoluteTimer);
-      events.forEach((event) => window.removeEventListener(event, resetIdle));
-      document.removeEventListener("visibilitychange", hidden);
+      events.forEach(event => window.removeEventListener(event, resetIdle));
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("pageshow", pageshow);
     };
-  }, [demo, screen, sessionStarted, lock]);
+  }, [deadline, vaultState.status, lock, handleVaultError, transition]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -302,30 +360,22 @@ export default function App() {
     setProgress("");
   };
   const enterDemo = () => {
-    generationRef.current++;
-    enrollmentAction.current?.cancel();
-    setEnrollmentStep(null);
-    void signOutVault();
-    setDemo(true);
-    setItems(demoItems.map((item) => ({ ...item })));
-    setScreen("vault");
-    setSection("My vault");
-    setCollection("");
-    setCategory("all");
-    setError("");
-    setBusy(false);
+    endSession();
+    transition({ status: "demo" });
+    setItems(demoItems.map(item => ({ ...item })));
   };
   const authenticate = async (enroll: boolean) => {
     if (!isVaultBackendReady) {
       setError("Secure storage is awaiting activation. Enable Firebase billing and Storage, then deploy the included security functions and rules. You can explore the sample vault below.");
       return;
     }
-    const current = generationRef.current;
+    const current = ++authenticationGeneration.current;
+    const work = generationRef.current;
     setBusy(true);
     setError("");
     try {
       if (enroll) await enrollPasskey((createPasskey) => new Promise((resolve, reject) => {
-        if (current !== generationRef.current) {
+        if (current !== authenticationGeneration.current) {
           reject(new Error("Setup was cancelled. Please start again."));
           return;
         }
@@ -353,17 +403,18 @@ export default function App() {
         setEnrollmentStep("confirm");
       }));
       else await signInWithPasskey();
-      if (current !== generationRef.current) return;
-      setSessionStarted(Date.now());
+      if (current !== authenticationGeneration.current) return;
+      const expiresAt = getVaultSessionDeadline();
+      transition({ status: "locked", expiresAt, config: undefined });
       const config = await getVaultConfig();
-      if (current !== generationRef.current) return;
-      setDemo(false);
-      setVaultConfig(config);
-      setScreen(config ? "unlock" : "create");
+      if (current !== authenticationGeneration.current) return;
+      if (!workIsCurrent(work)) return;
+      transition({ status: "locked", expiresAt, config });
       setPassphrase("");
       setConfirmPassphrase("");
     } catch (err) {
-      if (current === generationRef.current) {
+      if (current === authenticationGeneration.current) {
+        if (isAuthenticationFailure(err)) { handleVaultError(err); return; }
         const message = errorMessage(err);
         setError(
           message.includes("internal") ||
@@ -374,17 +425,19 @@ export default function App() {
         );
       }
     } finally {
-      if (current === generationRef.current) {
-        setBusy(false);
+      if (current === authenticationGeneration.current) {
+        if (work === generationRef.current) setBusy(false);
         setEnrollmentStep(null);
       }
     }
   };
   const decrypt = async (event: FormEvent) => {
     event.preventDefault();
+    const state = stateRef.current;
+    if (state.status !== "locked" || busy) return;
     const current = generationRef.current;
     setError("");
-    if (screen === "create" && (passphrase !== confirmPassphrase || !acknowledged)) {
+    if (state.config === null && (passphrase !== confirmPassphrase || !acknowledged)) {
       setError("Make sure your passphrases match and confirm that you have saved it securely.");
       return;
     }
@@ -393,29 +446,40 @@ export default function App() {
     setPassphrase("");
     setConfirmPassphrase("");
     try {
+      await validateVaultSession();
+      if (!workIsCurrent(current) || document.visibilityState !== "visible") return;
+      const config = await getVaultConfig();
+      if (!workIsCurrent(current)) return;
+      if (config === null && state.config === undefined) {
+        transition({ status: "locked", expiresAt: state.expiresAt, config: null });
+        return;
+      }
       let key: CryptoKey;
-      if (screen === "create") {
+      let encryptionConfig: VaultConfig;
+      if (config === null) {
         const created = await createVault(secret);
-        if (current !== generationRef.current) return;
+        if (!workIsCurrent(current)) return;
         await saveVaultConfig(created.config);
         key = created.key;
+        encryptionConfig = created.config;
       } else {
-        if (!vaultConfig)
-          throw new Error("Vault configuration is unavailable. Please sign in again.");
-        key = await unlockVault(secret, vaultConfig);
+        encryptionConfig = config;
+        key = await unlockVault(secret, config);
       }
-      if (current !== generationRef.current) return;
+      if (!workIsCurrent(current)) return;
+      // Keep the saved config if loading fails or a later unlock is needed.
+      transition({ status: "locked", expiresAt: state.expiresAt, config: encryptionConfig });
       const loaded = await listVaultItems(key);
-      if (current !== generationRef.current) return;
-      keyRef.current = key;
+      await validateVaultSession();
+      if (!workIsCurrent(current) || document.visibilityState !== "visible") return;
+      transition({ status: "unlocked", expiresAt: getVaultSessionDeadline(), config: encryptionConfig, key });
       setItems(loaded);
-      setScreen("vault");
       setSection("My vault");
       setCategory("all");
       setCollection("");
       notify("Welcome to your private space.");
     } catch (err) {
-      if (current === generationRef.current) setError(errorMessage(err));
+      if (current === generationRef.current) handleVaultError(err);
     } finally {
       if (current === generationRef.current) setBusy(false);
     }
@@ -425,10 +489,10 @@ export default function App() {
     const current = generationRef.current;
     try {
       if (!demo) {
-        if (!keyRef.current) throw new Error("Unlock the vault first.");
-        await updateVaultItem(keyRef.current, next);
+        if (!vaultKey) throw new Error("Unlock the vault first.");
+        await updateVaultItem(vaultKey, next);
       }
-      if (current !== generationRef.current) return;
+      if (!workIsCurrent(current)) return;
       setItems((values) => values.map((value) => (value.id === item.id ? next : value)));
       if ("trashed" in changes)
         notify(
@@ -437,16 +501,16 @@ export default function App() {
             : "File restored to your vault.",
         );
     } catch (err) {
-      if (current === generationRef.current) notify(errorMessage(err));
+      if (current === generationRef.current) handleVaultError(err);
     }
-    setMenuId(null);
+    if (current === generationRef.current) setMenuId(null);
   };
   const upload = async (files: FileList | File[]) => {
     if (demo) {
       openModal("setup");
       return;
     }
-    if (!keyRef.current) return;
+    if (!vaultKey) return;
     const fileList = Array.from(files);
     if (!fileList.length) return;
     if (fileList.some((file) => file.size > MAX_FILE_SIZE)) {
@@ -454,16 +518,16 @@ export default function App() {
       return;
     }
     const current = generationRef.current;
-    const key = keyRef.current;
+    const key = vaultKey;
     setBusy(true);
     setError("");
     let done = 0;
     try {
       for (const file of fileList) {
-        if (current !== generationRef.current) return;
+        if (!workIsCurrent(current)) return;
         setProgress(`Encrypting and uploading ${++done} of ${fileList.length}…`);
         const item = await uploadVaultFile(key, file, uploadCollection);
-        if (current !== generationRef.current) return;
+        if (!workIsCurrent(current)) return;
         setItems((values) => [item, ...values]);
       }
       setModal(null);
@@ -471,7 +535,7 @@ export default function App() {
         `${fileList.length === 1 ? "File" : `${fileList.length} files`} encrypted and saved to your vault.`,
       );
     } catch (err) {
-      if (current === generationRef.current) setError(errorMessage(err));
+      if (current === generationRef.current) handleVaultError(err);
     } finally {
       if (current === generationRef.current) {
         setBusy(false);
@@ -485,25 +549,25 @@ export default function App() {
       openModal("setup");
       return;
     }
-    if (!keyRef.current || !noteTitle.trim()) return;
+    if (!vaultKey || !noteTitle.trim()) return;
     const current = generationRef.current;
     setBusy(true);
     setError("");
     try {
       const item = await saveVaultNote(
-        keyRef.current,
+        vaultKey,
         noteTitle.trim(),
         noteText,
         uploadCollection,
       );
-      if (current !== generationRef.current) return;
+      if (!workIsCurrent(current)) return;
       setItems((values) => [item, ...values]);
       setModal(null);
       setNoteText("");
       setNoteTitle("");
       notify("Note encrypted and saved.");
     } catch (err) {
-      if (current === generationRef.current) setError(errorMessage(err));
+      if (current === generationRef.current) handleVaultError(err);
     } finally {
       if (current === generationRef.current) setBusy(false);
     }
@@ -522,26 +586,24 @@ export default function App() {
           return;
         }
       } else {
-        if (!keyRef.current) return;
+        if (!vaultKey) return;
         blob =
           item.kind === "note"
             ? new Blob([item.text || ""], { type: "text/plain" })
-            : await downloadVaultFile(keyRef.current, item);
+            : await downloadVaultFile(vaultKey, item);
       }
-      if (current !== generationRef.current) return;
-      const url = URL.createObjectURL(blob);
-      downloadUrls.current.add(url);
+      if (!workIsCurrent(current)) return;
+      const url = createPlaintextUrl(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = item.kind === "note" ? `${item.name}.txt` : item.name;
       a.click();
       setTimeout(() => {
-        URL.revokeObjectURL(url);
-        downloadUrls.current.delete(url);
+        revokePlaintextUrl(url);
       }, 15_000);
       notify("Downloaded a decrypted copy. Keep it somewhere safe.");
     } catch (err) {
-      if (current === generationRef.current) notify(errorMessage(err));
+      if (current === generationRef.current) handleVaultError(err);
     }
   };
   const deletePermanently = async () => {
@@ -550,12 +612,12 @@ export default function App() {
     setBusy(true);
     try {
       if (!demo) await permanentlyDeleteVaultItem(deleteItem);
-      if (current !== generationRef.current) return;
+      if (!workIsCurrent(current)) return;
       setItems((values) => values.filter((item) => item.id !== deleteItem.id));
       setDeleteItem(null);
       notify("File permanently deleted.");
     } catch (err) {
-      if (current === generationRef.current) notify(errorMessage(err));
+      if (current === generationRef.current) handleVaultError(err);
     } finally {
       if (current === generationRef.current) setBusy(false);
     }
@@ -607,8 +669,7 @@ export default function App() {
           className="button primary full"
           onClick={() => {
             setModal(null);
-            lock();
-            setDemo(false);
+            endSession();
           }}
         >
           Go to secure sign-in
@@ -653,8 +714,7 @@ export default function App() {
           <div>
             <h3>Private by default</h3>
             <p>
-              Your vault locks after 5 minutes of inactivity, when you leave the tab, or when the
-              15-minute session expires.
+              Your vault locks after 5 minutes of inactivity or when you leave the tab. Locking keeps your session active. Sign out ends access on this device, as does session expiry (at most 15 minutes).
             </p>
           </div>
         </div>
@@ -721,7 +781,7 @@ export default function App() {
                   : "Use your device passkey to enter. Your fingerprint, face, or device PIN opens the first door."
                 : screen === "create"
                   ? "Choose a strong passphrase of at least 12 characters. A few unrelated words make a good start."
-                  : "Enter your passphrase to decrypt your files. It stays on this device and is never sent to Firebase."}
+                  : "Your session is still active. Your passphrase unlocks your files locally; it is never sent to Firebase."}
             </p>
             {error && (
               <div className="error-message" role="alert">
@@ -743,7 +803,7 @@ export default function App() {
                     {enrollmentStep === "confirm" ? "Create my passkey" : "Waiting for your device…"}
                   </button>
                   <p className="auth-small" role="status">Keep this tab active while your device confirms it’s you.</p>
-                  <button className="text-button full back-button" onClick={() => lock()}>
+                  <button className="text-button full back-button" onClick={() => endSession()}>
                     <ArrowLeft size={15} /> Cancel setup
                   </button>
                 </>
@@ -754,7 +814,7 @@ export default function App() {
                   onClick={() => void authenticate(false)}
                 >
                   {busy ? <LoaderCircle size={20} className="spin" /> : <Fingerprint size={21} />}
-                  Unlock with passkey
+                  Sign in with passkey
                   <ArrowRight size={18} />
                 </button>
                 <div className="auth-divider">
@@ -844,10 +904,10 @@ export default function App() {
                 <button
                   type="button"
                   className="text-button full back-button"
-                  onClick={() => lock()}
+                  onClick={() => endSession()}
                 >
                   <ArrowLeft size={15} />
-                  Back to sign-in
+                  Sign out
                 </button>
               </form>
             )}
@@ -1030,6 +1090,7 @@ export default function App() {
               <LockKeyhole size={15} />
               Lock vault
             </button>
+            {!demo && <button className="lock-button" onClick={() => endSession()}>Sign out</button>}
             <button
               className="icon-button help-button"
               onClick={() => openModal("help")}
@@ -1073,7 +1134,7 @@ export default function App() {
                     icon: <Clock3 />,
                     title: "Automatic locking",
                     description:
-                      "After 5 minutes idle, when you leave the tab, and at the end of each 15-minute session.",
+                      "After 5 minutes idle or when you leave the tab. Locking preserves authentication; the 15-minute session expiry signs you out.",
                   },
                   {
                     icon: <Cloud />,
@@ -1323,7 +1384,7 @@ export default function App() {
                           onClick={() => setPreviewId(item.id)}
                           aria-label={`Preview ${item.name}`}
                         >
-                          <FileCover item={item} vaultKey={keyRef.current} />
+                          <FileCover item={item} vaultKey={vaultKey} />
                           <span className="preview-hover">
                             <Eye size={18} />
                             Quick look
@@ -1477,8 +1538,9 @@ export default function App() {
         <Preview
           key={preview.id}
           item={preview}
-          vaultKey={keyRef.current}
+          vaultKey={vaultKey}
           onClose={() => setPreviewId(null)}
+          onAuthenticationFailure={handleVaultError}
           onDownload={(item) => void download(item)}
           onStep={(offset) => {
             const index = visibleItems.findIndex((item) => item.id === preview.id);

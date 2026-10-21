@@ -10,7 +10,7 @@ Built with React, TypeScript, Vite, Firebase, SimpleWebAuthn, and the Web Crypto
 - Owner-only Google verification for initial enrollment, then passkey sign-in.
 - Photo pinch/wheel zoom and panning, local PDF rendering, and text previews. Office files can be stored and downloaded but have no inline preview.
 - Collections, search, favorites, grid/list layouts, trash, and encrypted notes.
-- Memory-only authentication, automatic locking, and expiring server sessions.
+- Memory-only authentication, separate Lock vault / Sign out actions, automatic locking, and expiring server sessions.
 - Files up to 50 MiB and notes up to 256 KiB.
 - A fictional demo that cannot upload real files.
 
@@ -68,6 +68,8 @@ sequenceDiagram
 ```
 
 First enrollment additionally requires the configured owner's verified Google account. The passphrase never goes to Firebase. A stolen database copy can still be subjected to offline passphrase guessing. An administrator who can deploy malicious JavaScript could capture future unlocks. Protect deployment access as carefully as the vault itself.
+
+Routine locking keeps your authenticated session active: enter only the passphrase to unlock locally. Signing out ends access on this device and attempts server revocation. The server session still expires after 15 minutes (the client signs out slightly earlier); neither locking nor unlocking renews it. Deploy the updated Functions before Hosting when upgrading; see [the lifecycle and upgrade notes](docs/ARCHITECTURE.md#authentication-lifecycle).
 
 ## Development checks
 

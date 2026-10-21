@@ -17,7 +17,7 @@ beforeEach(async () => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () => root.render(<Preview item={demoItems[0]} vaultKey={null} onClose={vi.fn()} onStep={vi.fn()} onDownload={vi.fn()} />));
+  await act(async () => root.render(<Preview item={demoItems[0]} vaultKey={null} onClose={vi.fn()} onStep={vi.fn()} onDownload={vi.fn()} onAuthenticationFailure={vi.fn()} />));
 });
 afterEach(async () => {
   await act(async () => root.unmount());

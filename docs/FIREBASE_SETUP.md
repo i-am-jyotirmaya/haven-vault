@@ -106,7 +106,7 @@ For Functions discovery timeouts, set `FUNCTIONS_DISCOVERY_TIMEOUT=60`: PowerShe
 
 Review Firebase's permission prompts, including Storage's cross-service Firestore access. The configuration includes indexes and TTL fields. Expired sessions are denied immediately even before TTL cleanup. Google sign-in is enabled in Console rather than by this command.
 
-The six callable services permit public HTTP invocation so browsers can begin authentication. Handlers still enforce owner identity, passkey signatures, challenges, and sessions. This does not make database or bucket data public. Public endpoints may receive unsolicited traffic and consume quota.
+The seven callable services permit public HTTP invocation so browsers can begin authentication. Handlers still enforce owner identity, passkey signatures, challenges, and sessions. This does not make database or bucket data public. Public endpoints may receive unsolicited traffic and consume quota.
 
 ## 5. Inspect and configure cloud access
 
@@ -130,7 +130,7 @@ node scripts/configure-callable-access.cjs --apply
 | Helper | Changes |
 | --- | --- |
 | Cloud access | Enables IAM Credentials API if needed; grants runtime `roles/iam.serviceAccountTokenCreator` on itself; adds `roles/datastore.user` if no recognized Firestore role exists; grants Storage service agent `roles/firebaserules.firestoreServiceAgent`; configures exact-origin GET/HEAD/OPTIONS CORS |
-| Callable access | Adds `allUsers` with `roles/run.invoker` to only the six vault services, preserving other bindings |
+| Callable access | Adds `allUsers` with `roles/run.invoker` to only the seven vault services, preserving other bindings |
 
 **The cloud-access helper replaces the bucket's current CORS list.** Use a dedicated bucket. Neither helper grants public object access or relaxes vault rules. The callable helper repairs private invocation policies that can remain after a failed initial deployment.
 
@@ -156,16 +156,15 @@ Optionally configure function build-image retention with Firebase's `functions:a
 2. Choose **Set up my private vault**, then verify the configured Google owner.
 3. Return to the vault tab, click **Create my passkey**, and finish the device prompt while the page stays focused.
 4. Create and confirm a strong unique passphrase, at least 12 characters. Keep an independent secure copy.
-5. Upload a non-sensitive fixture. Verify preview, download, lock, and unlock on each intended device.
+5. Upload a non-sensitive fixture. Verify preview, download, Lock vault, and passphrase-only unlock on each intended device. Verify Sign out from both the locked and unlocked screens, expiry while locked, and background/resume behavior.
 
-Later visits use **Unlock with passkey**, then the passphrase. The OS may synchronize passkeys; Haven does not manage synchronization. Google alone cannot replace a registered passkey. Losing the passphrase strands ciphertext, and losing every usable passkey blocks normal sign-in. There is no recovery UI.
+After signing out, visits use **Sign in with passkey**, then the passphrase. The OS may synchronize passkeys; Haven does not manage synchronization. Google alone cannot replace a registered passkey. Losing the passphrase strands ciphertext, and losing every usable passkey blocks normal sign-in. There is no recovery UI.
 
 ## Updates and backups
 
 Keep independent originals. This version has no complete encrypted export/import tool. A manually designed backup must preserve vault configuration, encrypted metadata, encrypted Storage objects, and the identifiers used by encryption contexts. Copying files alone is insufficient. Test restores before relying on them.
 
-For upgrades, review changes, install from both lockfiles, run checks, and deploy changed components explicitly. Changes to encryption formats, context strings, salts, or hostnames need a migration plan. Never reset backend records as routine troubleshooting.
-
+For upgrades, review changes, install from both lockfiles, run checks, and deploy changed components explicitly. For separate locking/sign-out, deploy Functions first: verification now returns authoritative session timing and the frontend uses `validateVaultSession` for read-only owner/expiry/revocation checks. Deploy Hosting afterward; no vault-data migration is needed. Changes to encryption formats, context strings, salts, or hostnames need a migration plan. Never reset backend records as routine troubleshooting.
 
 ## Local deployment commands
 
