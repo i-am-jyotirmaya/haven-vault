@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   records: new Map<string, unknown>(),
@@ -29,6 +29,8 @@ const id = 'A'.repeat(43);
 const request = { auth: { uid: 'owner', token: { vaultAccess: true, vaultSession: id } } };
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_700_000_000_000);
   vi.clearAllMocks();
   mocks.appCheck = false;
   mocks.records.clear();
@@ -36,6 +38,8 @@ beforeEach(() => {
   mocks.records.set(`_vaultSessions/${id}`, { uid: 'owner', revoked: false, sessionDurationMinutes: 15, expiresAt: { toMillis: () => Date.now() + 900_000 } });
   mocks.get.mockImplementation(async (path: string) => ({ data: () => mocks.records.get(path) }));
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe('authoritative vault session validation callable', () => {
   it('returns only enforced expiry and server time, without writes or renewal', async () => {
