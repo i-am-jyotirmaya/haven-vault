@@ -6,7 +6,11 @@ const project = 'demo-haven-vault';
 const localEnv = 'OWNER_EMAIL=owner@example.com\nRP_ID=localhost\nEXPECTED_ORIGIN=http://localhost:5173\nENFORCE_APP_CHECK=false\n';
 
 function run(args) {
+  // Keep this wrapper alive while Firebase handles Ctrl+C and exports data.
+  const ignoreInterrupt = () => {};
+  process.on('SIGINT', ignoreInterrupt);
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
+  process.removeListener('SIGINT', ignoreInterrupt);
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Command failed (${result.status ?? result.signal}).`);
 }
@@ -46,11 +50,11 @@ if (require.main === module) {
       const args = ['functions/node_modules/firebase-tools/lib/bin/firebase.js', 'emulators:exec', '--project', project,
         '--only', 'auth,functions,firestore,storage'];
       if (action === 'start') {
-        args.push('--ui');
+        args[1] = 'emulators:start';
         if (fs.existsSync(path.join(root, '.emulator-data/firebase-export-metadata.json'))) args.push('--import', '.emulator-data');
-        args.push('--export-on-exit', '.emulator-data', 'node scripts/local-vite.cjs');
+        args.push('--export-on-exit', '.emulator-data');
       } else args.push('node --test --test-concurrency=1 functions/test/local.test.mjs functions/test/rules.test.mjs');
-      run(args);
+      run(action === 'start' ? ['scripts/local-dev.cjs', ...args] : args);
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

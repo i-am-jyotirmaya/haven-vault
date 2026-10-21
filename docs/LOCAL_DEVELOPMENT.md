@@ -65,6 +65,7 @@ These tests do not replace device checks for platform passkey UX, touch gestures
 - `functions/.env.local` takes precedence over the project environment file in emulators. Startup rejects conflicting owner/RP/origin/App Check values instead of silently using cloud settings. Move or correct that override if startup reports a mismatch.
 - Do not manually run a partial emulator stack with a real project ID. Use `dev:local` or `test:local` so all required services use the same fictional project.
 - Production builds cannot use `--mode emulator`. `pnpm dev` keeps its existing behavior: it uses your configured cloud project, or the demo preview if unconfigured.
+- If your terminal sets HTTP(S) proxy variables, the locked Firebase CLI can route its internal Storage-to-Firestore session lookups through that proxy. If uploads are denied while Firestore works, download the emulators first, then run locally with those proxy variables unset.
 - A wrong or unfocused passkey origin, lost local credentials, wrong synthetic owner email, occupied ports, old Java, or stale Functions compilation can each prevent login. Check terminal output and Emulator UI. Keep the app tab focused for passkey prompts.
 
 Firebase references: [demo projects and Auth](https://firebase.google.com/docs/emulator-suite/connect_auth), [Firestore](https://firebase.google.com/docs/emulator-suite/connect_firestore), [Storage](https://firebase.google.com/docs/emulator-suite/connect_storage), [Functions environment precedence](https://firebase.google.com/docs/functions/config-env#emulator_support).
