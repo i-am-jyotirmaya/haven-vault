@@ -1,5 +1,5 @@
 // Repair invocation access after an initially failed Functions deployment.
-// Only these six services receive the public transport permission. Handlers
+// Only these seven services receive the public transport permission. Handlers
 // still validate owner identity, passkey signatures, and expiring sessions.
 const { getGlobalDefaultAccount } = require('../functions/node_modules/firebase-tools/lib/auth');
 const { requireAuth } = require('../functions/node_modules/firebase-tools/lib/requireAuth');
@@ -8,7 +8,7 @@ const { project, region } = require('./config.cjs').loadConfig();
 const apply = process.argv.includes('--apply');
 const services = [
   'vaultsessioninfo', 'registrationoptions', 'verifyregistration',
-  'authenticationoptions', 'verifyauthentication', 'endvaultsession',
+  'authenticationoptions', 'verifyauthentication', 'endvaultsession', 'validatevaultsession',
 ];
 let current = 'authenticate';
 

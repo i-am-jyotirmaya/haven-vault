@@ -61,6 +61,11 @@ async function callable(name) {
       assert.equal(response.status, 401);
       assert.equal(body.error.status, 'UNAUTHENTICATED');
     }),
+    run('Vault session validation requires passkey authentication', async () => {
+      const { response, body } = await callable('validateVaultSession');
+      assert.equal(response.status, 401);
+      assert.equal(body.error.status, 'UNAUTHENTICATED');
+    }),
     run('Session revocation requires authentication', async () => {
       const { response, body } = await callable('endVaultSession');
       assert.equal(response.status, 401);

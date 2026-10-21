@@ -266,7 +266,11 @@ export default function App() {
       if (document.visibilityState !== "visible") return;
       if (stateRef.current.status === "unlocked") lock();
       const current = generationRef.current;
-      void validateVaultSession().catch(err => {
+      void validateVaultSession().then(() => {
+        if (current !== generationRef.current) return;
+        const state = stateRef.current;
+        if (state.status === "locked") transition({ ...state, expiresAt: Math.min(state.expiresAt, getVaultSessionDeadline()) });
+      }).catch(err => {
         if (current === generationRef.current) handleVaultError(err);
       });
     };
@@ -291,7 +295,7 @@ export default function App() {
       window.removeEventListener("focus", resume);
       window.removeEventListener("pageshow", pageshow);
     };
-  }, [deadline, vaultState.status, lock, handleVaultError]);
+  }, [deadline, vaultState.status, lock, handleVaultError, transition]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -365,6 +369,7 @@ export default function App() {
       return;
     }
     const current = ++authenticationGeneration.current;
+    const work = generationRef.current;
     setBusy(true);
     setError("");
     try {
@@ -400,7 +405,6 @@ export default function App() {
       if (current !== authenticationGeneration.current) return;
       const expiresAt = getVaultSessionDeadline();
       transition({ status: "locked", expiresAt, config: undefined });
-      const work = generationRef.current;
       const config = await getVaultConfig();
       if (current !== authenticationGeneration.current) return;
       if (!workIsCurrent(work)) return;
@@ -421,7 +425,7 @@ export default function App() {
       }
     } finally {
       if (current === authenticationGeneration.current) {
-        setBusy(false);
+        if (work === generationRef.current) setBusy(false);
         setEnrollmentStep(null);
       }
     }
@@ -498,7 +502,7 @@ export default function App() {
     } catch (err) {
       if (current === generationRef.current) handleVaultError(err);
     }
-    setMenuId(null);
+    if (current === generationRef.current) setMenuId(null);
   };
   const upload = async (files: FileList | File[]) => {
     if (demo) {
