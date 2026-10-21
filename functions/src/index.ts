@@ -237,6 +237,27 @@ async function issueSession(uid: string): Promise<{ token: string }> {
   }
 }
 
+/** Read-only check of the same owner/session policy enforced by data rules. */
+export const validateVaultSession = onCall(callableOptions, async (request) => {
+  checkApp(request);
+  const user = principal(request);
+  const id = claimSession(request);
+  if (!id) throw new HttpsError("unauthenticated", "A passkey vault session is required.");
+  return db.runTransaction(async (transaction) => {
+    const owner = await transaction.get(ownerRef);
+    const snapshot = await transaction.get(sessions.doc(id));
+    const data = snapshot.data();
+    const serverNowMs = Date.now();
+    const expiresAtMs = data?.expiresAt?.toMillis();
+    if (owner.data()?.uid !== user.uid || !validSession(data ? {
+      uid: data.uid, expiresAtMs, revoked: data.revoked,
+    } : undefined, user.uid, serverNowMs)) {
+      throw new HttpsError("permission-denied", "Your vault session has ended. Sign in again.");
+    }
+    return { expiresAtMs, serverNowMs };
+  });
+});
+
 export const vaultSessionInfo = onCall(callableOptions, async (request) => {
   const config = configured(request);
   const user = principal(request);

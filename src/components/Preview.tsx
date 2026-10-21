@@ -3,9 +3,11 @@ import { Download, FileText, LockKeyhole, Minus, Plus, RotateCcw, X, ChevronLeft
 import type { DisplayItem } from '../demo';
 import { formatBytes } from '../demo';
 import { downloadVaultFile } from '../lib/vault';
+import { isAuthenticationFailure, getVaultUserId } from '../lib/firebase';
+import { createPlaintextUrl, revokePlaintextUrl, plaintextGeneration, plaintextIsCurrent } from '../lib/plaintext';
 const PdfPreview = lazy(() => import('./PdfPreview'));
 
-export default function Preview({ item, vaultKey, onClose, onStep, onDownload }: { item: DisplayItem; vaultKey: CryptoKey | null; onClose: () => void; onStep: (offset: number) => void; onDownload: (item: DisplayItem) => void }) {
+export default function Preview({ item, vaultKey, onClose, onStep, onDownload, onAuthenticationFailure }: { item: DisplayItem; vaultKey: CryptoKey | null; onClose: () => void; onStep: (offset: number) => void; onDownload: (item: DisplayItem) => void; onAuthenticationFailure: (error: unknown) => void }) {
   const [url, setUrl] = useState(item.demoUrl || '');
   const [text, setText] = useState(item.text || '');
   const [busy, setBusy] = useState(false);
@@ -27,23 +29,26 @@ export default function Preview({ item, vaultKey, onClose, onStep, onDownload }:
   useEffect(() => {
     let cancelled = false;
     let objectUrl = '';
+    const generation = plaintextGeneration();
+    const active = () => !cancelled && plaintextIsCurrent(generation);
     setUrl(item.demoUrl || ''); setText(item.text || ''); setError(''); setScale(1); setPosition({ x: 0, y: 0 }); pointers.current.clear();
     if (!item.demoUrl && item.kind !== 'note' && !sampleDocument && vaultKey && (isPhoto || isPdf || isText)) {
       setBusy(true);
       downloadVaultFile(vaultKey, item).then(async blob => {
-        if (cancelled) return;
+        if (!active()) return;
+        getVaultUserId();
         if (isText) {
           if (blob.size > 2 * 1024 * 1024) throw new Error('This text file is too large to preview. Download it to read the full file.');
           const value = await blob.text();
-          if (!cancelled) setText(value);
+          if (active()) { getVaultUserId(); setText(value); }
         } else {
-          objectUrl = URL.createObjectURL(blob);
+          objectUrl = createPlaintextUrl(blob);
           setUrl(objectUrl);
         }
-      }).catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Unable to decrypt preview.'); }).finally(() => { if (!cancelled) setBusy(false); });
+      }).catch(err => { if (active()) { if (isAuthenticationFailure(err)) onAuthenticationFailure(err); else setError(err instanceof Error ? err.message : 'Unable to decrypt preview.'); } }).finally(() => { if (active()) setBusy(false); });
     } else setBusy(false);
-    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [item, vaultKey, isPhoto, isPdf, isText, sampleDocument]);
+    return () => { cancelled = true; if (objectUrl) revokePlaintextUrl(objectUrl); };
+  }, [item, vaultKey, isPhoto, isPdf, isText, sampleDocument, onAuthenticationFailure]);
 
   const zoom = (next: number) => { setScale(Math.max(0.5, Math.min(5, next))); };
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {

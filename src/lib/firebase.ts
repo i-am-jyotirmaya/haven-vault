@@ -88,11 +88,55 @@ function clearLocalSession() {
   localSessionExpiresAt = 0
 }
 
+export class VaultAuthenticationError extends Error {}
+
+export function isAuthenticationFailure(error: unknown): boolean {
+  if (error instanceof VaultAuthenticationError) return true
+  const code = (error as { code?: string } | null)?.code
+  return ['functions/unauthenticated', 'functions/permission-denied', 'permission-denied',
+    'unauthenticated', 'storage/unauthorized', 'auth/user-token-expired',
+    'auth/invalid-user-token', 'auth/user-disabled'].includes(code || '')
+}
+
+export function getVaultSessionDeadline(): number {
+  getVaultUserId()
+  return localSessionExpiresAt
+}
+
+/** Validate against the private server record, without issuing or refreshing a session. */
+export async function validateVaultSession(): Promise<void> {
+  const uid = getVaultUserId()
+  const generation = authenticationGeneration
+  const startedAt = Date.now()
+  const { functions } = requireServices()
+  const check = httpsCallable<Record<string, never>, { expiresAtMs: number; serverNowMs: number }>(
+    functions, 'validateVaultSession', { timeout: 4000 },
+  )
+  let data: { expiresAtMs: number; serverNowMs: number }
+  try {
+    ;({ data } = await check({}))
+  } catch (error) {
+    if (generation === authenticationGeneration && isAuthenticationFailure(error)) clearLocalSession()
+    throw error
+  }
+  checkAuthenticationGeneration(generation)
+  if (getVaultUserId() !== uid) throw new VaultAuthenticationError('Your vault session has ended.')
+  if (!Number.isFinite(data.expiresAtMs) || !Number.isFinite(data.serverNowMs)) {
+    throw new Error('The server could not confirm your session. Please try again.')
+  }
+  // Request start is conservative about latency. Never move the deadline later,
+  // even if this check is repeated or the server clock differs from this device.
+  localSessionExpiresAt = Math.min(localSessionExpiresAt,
+    startedAt + data.expiresAtMs - data.serverNowMs - 15_000)
+  getVaultUserId()
+}
+
 async function acceptVaultToken(token: string) {
   const services = requireServices()
   if (typeof token !== 'string' || token.length === 0) {
     throw new Error('The server did not return a valid vault session.')
   }
+  const acceptedAt = Date.now()
   const credential = await signInWithCustomToken(services.auth, token)
   const { claims } = await credential.user.getIdTokenResult()
   if (
@@ -105,7 +149,8 @@ async function acceptVaultToken(token: string) {
   activeVaultUid = credential.user.uid
   // Rules and callable functions independently enforce the server session
   // deadline; this deadline only makes the client fail closed sooner.
-  localSessionExpiresAt = Date.now() + VAULT_SESSION_DURATION_MS
+  localSessionExpiresAt = acceptedAt + VAULT_SESSION_DURATION_MS
+  await validateVaultSession()
 }
 
 /** First-time setup requires the owner's verified Google identity. */
@@ -189,10 +234,11 @@ export async function signInWithPasskey(): Promise<void> {
   }
 }
 
-export async function signOutVault(): Promise<void> {
+export async function signOutVault(): Promise<{ revoked: boolean }> {
   authenticationGeneration++
   clearLocalSession()
-  if (!auth) return
+  if (!auth) return { revoked: true }
+  let revoked = true
   const activeAuth = auth
   const previousLogout = logoutPending
   logoutPending = (async () => {
@@ -200,7 +246,7 @@ export async function signOutVault(): Promise<void> {
     try {
       if (activeAuth.currentUser && functions) {
         const endSession = httpsCallable<Record<string, never>, unknown>(functions, 'endVaultSession', { timeout: 4000 })
-        await endSession({}).catch(() => undefined)
+        await endSession({}).catch(() => { revoked = false })
       }
     } finally {
       // A bounded revocation request must not indefinitely retain local tokens.
@@ -208,6 +254,7 @@ export async function signOutVault(): Promise<void> {
     }
   })().catch(() => undefined)
   await logoutPending
+  return { revoked }
 }
 
 export function getVaultUserId(): string {
@@ -218,7 +265,7 @@ export function getVaultUserId(): string {
     Date.now() >= localSessionExpiresAt
   ) {
     clearLocalSession()
-    throw new Error('Your vault session has ended. Verify your identity again.')
+    throw new VaultAuthenticationError('Your vault session has ended. Verify your identity again.')
   }
   return activeVaultUid
 }

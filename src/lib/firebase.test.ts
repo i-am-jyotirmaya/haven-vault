@@ -57,6 +57,7 @@ beforeEach(() => {
   mocks.call.mockImplementation(async (name: string) => {
     if (name === 'authenticationOptions' || name === 'registrationOptions') return { data: { options: {}, challengeId: 'challenge' } };
     if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token' } };
+    if (name === 'validateVaultSession') return { data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 } };
     return { data: { ended: true } };
   });
 });
