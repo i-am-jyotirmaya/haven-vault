@@ -17,3 +17,5 @@ Explain the problem, resulting behavior, and validation in your pull request. Ad
 Do not submit real vault files, passphrases, credentials, CLI logs, environment files, service-account keys, or private screenshots. Use fictional fixtures. Commit both lockfiles, but not node_modules, dist, functions/lib, emulator state, or local project bindings.
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md#reporting-a-vulnerability). Do not publish exploit details or sensitive data in an issue.
+
+For full local testing without a cloud project, see [the emulator workflow](docs/LOCAL_DEVELOPMENT.md). Start with `pnpm dev:local`; run `pnpm test:local` with the dev stack stopped.

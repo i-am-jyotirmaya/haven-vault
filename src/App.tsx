@@ -54,6 +54,7 @@ import { createVault, unlockVault, type VaultConfig } from "./lib/crypto";
 import {
   enrollPasskey,
   isFirebaseConfigured,
+  isEmulatorMode,
   isVaultBackendReady,
   signInWithPasskey,
   signOutVault,
@@ -689,6 +690,7 @@ export default function App() {
             <CircleHelp size={16} /> How Haven works
           </button>
           <div className="auth-card">
+            {isEmulatorMode && <p className="setup-notice" role="status">Local testing · Firebase emulators · owner@example.com</p>}
             <div className="auth-progress">
               <span className={screen === "login" ? "current" : "complete"}>
                 {screen === "login" ? "1" : <Check size={12} />}

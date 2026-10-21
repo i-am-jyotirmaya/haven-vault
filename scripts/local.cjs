@@ -10,20 +10,20 @@ function run(args) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Command failed (${result.status ?? result.signal}).`);
 }
-function setup() {
-  const file = path.join(root, `functions/.env.${project}`);
+function setup(directory = root) {
+  const file = path.join(directory, `functions/.env.${project}`);
   if (!fs.existsSync(file)) fs.writeFileSync(file, localEnv, { flag: 'wx' });
   console.log('Local configuration ready. Owner: owner@example.com; app: http://localhost:5173');
 }
-function validateLocalEnv() {
-  const { parse } = require('../functions/node_modules/dotenv');
+function validateLocalEnv(directory = root, environment = process.env) {
+  const { parseEnv: parse } = require('node:util');
   const merged = {};
   for (const name of ['.env', `.env.${project}`, '.env.local']) {
-    const file = path.join(root, 'functions', name);
-    if (fs.existsSync(file)) Object.assign(merged, parse(fs.readFileSync(file)));
+    const file = path.join(directory, 'functions', name);
+    if (fs.existsSync(file)) Object.assign(merged, parse(fs.readFileSync(file, 'utf8')));
   }
-  for (const [key, value] of Object.entries(require('../functions/node_modules/dotenv').parse(localEnv))) {
-    if ((process.env[key] ?? merged[key]) !== value) {
+  for (const [key, value] of Object.entries(parse(localEnv))) {
+    if ((environment[key] ?? merged[key]) !== value) {
       throw new Error(`Local ${key} must equal ${value}. Check functions/.env.local and shell overrides.`);
     }
   }
@@ -46,9 +46,10 @@ if (require.main === module) {
       const args = ['functions/node_modules/firebase-tools/lib/bin/firebase.js', 'emulators:exec', '--project', project,
         '--only', 'auth,functions,firestore,storage'];
       if (action === 'start') {
+        args.push('--ui');
         if (fs.existsSync(path.join(root, '.emulator-data/firebase-export-metadata.json'))) args.push('--import', '.emulator-data');
         args.push('--export-on-exit', '.emulator-data', 'node scripts/local-vite.cjs');
-      } else args.push('node --test functions/test/local.test.mjs functions/test/rules.test.mjs');
+      } else args.push('node --test --test-concurrency=1 functions/test/local.test.mjs functions/test/rules.test.mjs');
       run(args);
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
