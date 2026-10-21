@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   records: new Map<string, unknown>(),
@@ -16,7 +16,7 @@ vi.mock('firebase-admin/firestore', () => ({
   }),
 }));
 vi.mock('firebase-functions/params', () => ({
-  defineString: () => ({ value: () => '' }),
+  defineString: (_name: string, options?: { default?: string }) => ({ value: () => options?.default ?? '' }),
   defineBoolean: () => ({ value: () => mocks.appCheck }),
 }));
 vi.mock('firebase-functions/v2/https', async importOriginal => ({
@@ -29,18 +29,22 @@ const id = 'A'.repeat(43);
 const request = { auth: { uid: 'owner', token: { vaultAccess: true, vaultSession: id } } };
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_700_000_000_000);
   vi.clearAllMocks();
   mocks.appCheck = false;
   mocks.records.clear();
   mocks.records.set('_vaultAuth/owner', { uid: 'owner' });
-  mocks.records.set(`_vaultSessions/${id}`, { uid: 'owner', revoked: false, expiresAt: { toMillis: () => Date.now() + 900_000 } });
+  mocks.records.set(`_vaultSessions/${id}`, { uid: 'owner', revoked: false, sessionDurationMinutes: 15, expiresAt: { toMillis: () => Date.now() + 900_000 } });
   mocks.get.mockImplementation(async (path: string) => ({ data: () => mocks.records.get(path) }));
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe('authoritative vault session validation callable', () => {
   it('returns only enforced expiry and server time, without writes or renewal', async () => {
     const result = await validate(request);
-    expect(Object.keys(result).sort()).toEqual(['expiresAtMs', 'serverNowMs']);
+    expect(Object.keys(result).sort()).toEqual(['expiresAtMs', 'serverNowMs', 'sessionDurationMinutes']);
     expect(result.expiresAtMs - result.serverNowMs).toBeGreaterThanOrEqual(899_990);
     expect(mocks.get).toHaveBeenCalledWith('_vaultAuth/owner');
     expect(mocks.get).toHaveBeenCalledWith(`_vaultSessions/${id}`);
@@ -55,7 +59,7 @@ describe('authoritative vault session validation callable', () => {
     await expect(validate(input || {})).rejects.toMatchObject({ code: 'unauthenticated' });
   });
   it.each(['missing', 'revoked', 'expired', 'different-session-owner', 'different-vault-owner'])('rejects %s authority', async condition => {
-    const session = { uid: 'owner', revoked: false, expiresAt: { toMillis: () => Date.now() + 900_000 } };
+    const session = { uid: 'owner', revoked: false, sessionDurationMinutes: 15, expiresAt: { toMillis: () => Date.now() + 900_000 } };
     if (condition === 'missing') mocks.records.delete(`_vaultSessions/${id}`);
     if (condition === 'revoked') mocks.records.set(`_vaultSessions/${id}`, { ...session, revoked: true });
     if (condition === 'expired') mocks.records.set(`_vaultSessions/${id}`, { ...session, expiresAt: { toMillis: () => Date.now() } });

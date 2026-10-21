@@ -15,7 +15,7 @@ import {
 } from "@simplewebauthn/server";
 import {
   CHALLENGE_MS,
-  SESSION_MS,
+  sessionDurationMs,
   enrollmentAllowed,
   isCredentialId,
   isFreshOwnerGoogle,
@@ -36,6 +36,14 @@ const rpId = defineString("RP_ID", {
 const expectedOrigin = defineString("EXPECTED_ORIGIN", {
   description: "Exact production origin, for example https://your-project.web.app.",
 });
+const authSessionMinutes = defineString("AUTH_SESSION_MINUTES", {
+  default: "60",
+  description: "Absolute lifetime of newly issued sessions: 15, 30, or 60 minutes.",
+});
+function configuredSessionDuration(): number {
+  try { return sessionDurationMs(authSessionMinutes.value()); }
+  catch { throw new HttpsError("failed-precondition", "AUTH_SESSION_MINUTES must be 15, 30, or 60."); }
+}
 const enforceAppCheck = defineBoolean("ENFORCE_APP_CHECK", { default: false });
 const callableOptions = {
   region: "us-central1",
@@ -89,6 +97,7 @@ function checkApp(request: CallableRequest): void {
 
 function configured(request: CallableRequest): { rpID: string; origin: string; email: string } {
   checkApp(request);
+  configuredSessionDuration();
   const email = ownerEmail.value().trim().toLowerCase();
   const rpID = rpId.value();
   const origin = expectedOrigin.value();
@@ -217,21 +226,23 @@ async function consumeChallenge(
   });
 }
 
-async function issueSession(uid: string): Promise<{ token: string; expiresAtMs: number; serverNowMs: number }> {
+async function issueSession(uid: string): Promise<{ token: string; expiresAtMs: number; serverNowMs: number; sessionDurationMinutes: number }> {
   const id = opaqueId();
   const ref = sessions.doc(id);
-  const expiresAtMs = Date.now() + SESSION_MS;
+  const durationMs = configuredSessionDuration();
+  const expiresAtMs = Date.now() + durationMs;
   await ref.create({
     uid,
     createdAt: Timestamp.now(),
     expiresAt: Timestamp.fromMillis(expiresAtMs),
+    sessionDurationMinutes: durationMs / 60_000,
     revoked: false,
   });
   try {
     // Never set persistent custom claims: every successful ceremony gets its own
     // expiring server-side session, independent of Firebase's refresh token.
     const token = await getAuth().createCustomToken(uid, { vaultAccess: true, vaultSession: id });
-    return { token, expiresAtMs, serverNowMs: Date.now() };
+    return { token, expiresAtMs, serverNowMs: Date.now(), sessionDurationMinutes: durationMs / 60_000 };
   } catch {
     await ref.delete();
     throw new HttpsError("internal", "Could not start a vault session. Please try again.");
@@ -250,12 +261,19 @@ export const validateVaultSession = onCall(callableOptions, async (request) => {
     const data = snapshot.data();
     const serverNowMs = Date.now();
     const expiresAtMs = data?.expiresAt?.toMillis();
-    if (owner.data()?.uid !== user.uid || !validSession(data ? {
+    if (!data || owner.data()?.uid !== user.uid || !validSession(data ? {
       uid: data.uid, expiresAtMs, revoked: data.revoked,
     } : undefined, user.uid, serverNowMs)) {
       throw new HttpsError("permission-denied", "Your vault session has ended. Sign in again.");
     }
-    return { expiresAtMs, serverNowMs };
+    // Older records already have createdAt and a fixed 15-minute lifetime.
+    // Read the issued record, never current deployment settings, on validation.
+    const sessionDurationMinutes = data.sessionDurationMinutes ??
+      Math.round((expiresAtMs - data.createdAt?.toMillis()) / 60_000);
+    if (![15, 30, 60].includes(sessionDurationMinutes)) {
+      throw new HttpsError("permission-denied", "Invalid session lifetime. Sign in again.");
+    }
+    return { expiresAtMs, serverNowMs, sessionDurationMinutes };
   });
 });
 

@@ -36,3 +36,13 @@ test('hosting is published only after backend validation; IAM mutations are expl
     assert.ok(deploys[0][1].includes(config.project));
   }
 });
+
+
+test('deployment rejects undocumented authentication lifetimes', () => {
+  for (const value of ['15', '30', '60']) {
+    assert.doesNotThrow(() => validateDeployment(config, browser, { ...backend, AUTH_SESSION_MINUTES: value }, {}));
+  }
+  for (const value of ['', '0', '90', 'Infinity', '15.0']) {
+    assert.throws(() => validateDeployment(config, browser, { ...backend, AUTH_SESSION_MINUTES: value }, {}), /AUTH_SESSION_MINUTES/);
+  }
+});

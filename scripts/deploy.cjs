@@ -28,6 +28,7 @@ function validateDeployment(config, browser, backend, environment = process.env)
   if (backend.RP_ID !== config.rpId || backend.EXPECTED_ORIGIN !== config.origin) {
     throw new Error('Functions RP_ID and EXPECTED_ORIGIN must match the deployment origin.');
   }
+  if (!['15', '30', '60'].includes(backend.AUTH_SESSION_MINUTES ?? '60')) throw new Error('AUTH_SESSION_MINUTES must be 15, 30, or 60.');
   if (backend.ENFORCE_APP_CHECK !== 'false') throw new Error('This client has no App Check integration; ENFORCE_APP_CHECK must be false.');
 }
 

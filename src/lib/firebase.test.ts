@@ -42,6 +42,7 @@ vi.mock('@simplewebauthn/browser', () => ({
 
 beforeEach(() => {
   vi.resetModules();
+  vi.spyOn(performance, 'now').mockReturnValue(0);
   vi.clearAllMocks();
   vi.stubGlobal('document', { visibilityState: 'visible', hasFocus: vi.fn(() => true) });
   for (const variable of ['API_KEY', 'AUTH_DOMAIN', 'PROJECT_ID', 'STORAGE_BUCKET', 'MESSAGING_SENDER_ID', 'APP_ID']) {
@@ -59,8 +60,8 @@ beforeEach(() => {
   mocks.signOut.mockImplementation(async () => { mocks.auth.currentUser = null; });
   mocks.call.mockImplementation(async (name: string) => {
     if (name === 'authenticationOptions' || name === 'registrationOptions') return { data: { options: {}, challengeId: 'challenge' } };
-    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: Date.now(), expiresAtMs: Date.now() + 900_000 } };
-    if (name === 'validateVaultSession') return { data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 } };
+    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: Date.now(), expiresAtMs: Date.now() + 3_600_000, sessionDurationMinutes: 60 } };
+    if (name === 'validateVaultSession') return { data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 60 * 60_000, sessionDurationMinutes: 60 } };
     return { data: { ended: true } };
   });
 });
@@ -179,7 +180,7 @@ describe('vault authentication lifecycle', () => {
     const session = await import('./firebase');
     await session.signInWithPasskey();
     expect(session.getVaultUserId()).toBe('owner');
-    now += session.VAULT_SESSION_DURATION_MS + 1;
+    now += 3_585_000 + 1;
     expect(() => session.getVaultUserId()).toThrow('ended');
   });
 
@@ -202,7 +203,7 @@ describe('vault authentication lifecycle', () => {
     expect(session.getVaultSessionDeadline()).toBe(original);
     // The server's clock can differ; use its remaining lifetime, not an
     // absolute timestamp compared with the client's wall clock.
-    mocks.call.mockResolvedValueOnce({ data: { serverNowMs: 5_000_000, expiresAtMs: 5_100_000 } });
+    mocks.call.mockResolvedValueOnce({ data: { serverNowMs: 5_000_000, expiresAtMs: 5_100_000, sessionDurationMinutes: 60 } });
     await session.validateVaultSession();
     expect(session.getVaultSessionDeadline()).toBe(now + 85_000);
     await session.validateVaultSession();
@@ -217,7 +218,7 @@ describe('vault authentication lifecycle', () => {
     });
     const session = await import('./firebase');
     await session.signInWithPasskey();
-    expect(session.getVaultSessionDeadline()).toBe(10_000 + session.VAULT_SESSION_DURATION_MS);
+    expect(session.getVaultSessionDeadline()).toBe(10_000 + 3_585_000);
   });
 
   it('clears usable local authorization on confirmed server revocation, but not network errors', async () => {
@@ -249,7 +250,7 @@ describe('vault authentication lifecycle', () => {
     const pending = session.validateVaultSession();
     const rejected = expect(pending).rejects.toThrow('cancelled');
     await session.signOutVault();
-    finish({ data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 900_000 } });
+    finish({ data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 3_600_000, sessionDurationMinutes: 60 } });
     await rejected;
     expect(() => session.getVaultUserId()).toThrow('ended');
   });
@@ -283,9 +284,42 @@ describe('emulator isolation', () => {
     vi.stubGlobal('window', { location: { hostname: 'example.web.app' } });
     await expect(import('./firebase')).rejects.toThrow('local development');
     vi.resetModules();
+  vi.spyOn(performance, 'now').mockReturnValue(0);
     vi.stubEnv('DEV', false);
     vi.stubGlobal('window', { location: { hostname: 'localhost' } });
     await expect(import('./firebase')).rejects.toThrow('local development');
     expect(mocks.initializeAuth).not.toHaveBeenCalled();
+  });
+});
+
+describe('server timing and clock validation', () => {
+  it.each([15, 30, 60])('accepts the issued %s-minute lifetime without a 15-minute cap', async minutes => {
+    mocks.call.mockImplementation(async (name: string) => {
+      if (name === 'authenticationOptions') return { data: { options: {}, challengeId: 'challenge' } };
+      return { data: { token: 'server-token', expiresAtMs: Date.now() + minutes * 60_000, serverNowMs: Date.now(), sessionDurationMinutes: minutes } };
+    });
+    const session = await import('./firebase');
+    const start = Date.now(); await session.signInWithPasskey();
+    expect(session.getVaultSessionDeadline()).toBeGreaterThanOrEqual(start + minutes * 60_000 - 15_000);
+    expect(session.getVaultSessionLifetimeMinutes()).toBe(minutes);
+  });
+  it.each([0, 16, 90, Infinity])('rejects an invalid server-issued lifetime %s', async minutes => {
+    mocks.call.mockImplementation(async (name: string) => {
+      if (name === 'authenticationOptions') return { data: { options: {}, challengeId: 'challenge' } };
+      return { data: { token: 'server-token', expiresAtMs: Date.now() + 3_600_000, serverNowMs: Date.now(), sessionDurationMinutes: minutes } };
+    });
+    const session = await import('./firebase');
+    await expect(session.signInWithPasskey()).rejects.toThrow('valid vault session');
+    expect(() => session.getVaultUserId()).toThrow();
+  });
+  it('backward wall clock movement cannot bypass the original authentication budget', async () => {
+    let wall = 1_700_000_000_000, elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    const session = await import('./firebase'); await session.signInWithPasskey();
+    const deadline = session.getVaultSessionDeadline();
+    wall -= 86_400_000; elapsed += 3_600_000;
+    expect(() => session.getVaultUserId()).toThrow('ended');
+    expect(deadline).toBeGreaterThan(wall);
   });
 });

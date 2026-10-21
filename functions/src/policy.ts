@@ -1,4 +1,9 @@
-export const SESSION_MS = 15 * 60 * 1000;
+export function sessionDurationMs(value: string = "60"): number {
+  if (!["15", "30", "60"].includes(value)) {
+    throw new Error("AUTH_SESSION_MINUTES must be 15, 30, or 60.");
+  }
+  return Number(value) * 60_000;
+}
 export const CHALLENGE_MS = 5 * 60 * 1000;
 export const MAX_PASSKEYS = 5;
 

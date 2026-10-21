@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   enrollmentAllowed,
+  sessionDurationMs,
   isFreshOwnerGoogle,
   validRelyingParty,
   validSession,
@@ -55,4 +56,13 @@ test("RP configuration requires an exact secure origin and correctly bounded dom
   assert.equal(validRelyingParty("vault.example.com", "https://vault.example.com/path"), false);
   assert.equal(validRelyingParty("vault.example.com", "https://vault.example.com/"), false);
   assert.equal(validRelyingParty("", ""), false);
+});
+
+
+test("authentication lifetime accepts only documented deployment values", () => {
+  assert.equal(sessionDurationMs(), 3_600_000);
+  for (const value of ["15", "30", "60"]) assert.equal(sessionDurationMs(value), Number(value) * 60_000);
+  for (const value of ["", "0", "-1", "90", "Infinity", "15.0", " 30", "60minutes"]) {
+    assert.throws(() => sessionDurationMs(value), /AUTH_SESSION_MINUTES/);
+  }
 });

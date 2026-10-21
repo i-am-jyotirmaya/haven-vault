@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -59,6 +60,7 @@ import {
   signInWithPasskey,
   signOutVault,
   getVaultSessionDeadline,
+  getVaultSessionLifetimeMinutes,
   getVaultUserId,
   isAuthenticationFailure,
   validateVaultSession,
@@ -76,6 +78,8 @@ import {
 } from "./lib/vault";
 import { lockVaultState, sessionDeadline, type VaultState } from "./lib/vaultState";
 import { clearPlaintext, createPlaintextUrl, revokePlaintextUrl } from "./lib/plaintext";
+import { useVaultPolicy } from "./lib/useVaultPolicy";
+import SecuritySettings from "./components/SecuritySettings";
 import Modal from "./components/Modal";
 import Preview from "./components/Preview";
 
@@ -241,62 +245,52 @@ export default function App() {
     if (isAuthenticationFailure(err)) endSession("Your secure session ended. Sign in again.");
     else setError(errorMessage(err));
   }, [endSession]);
-  const workIsCurrent = (generation: number) => {
-    if (generation !== generationRef.current) return false;
+  const workIsCurrent = (generation: number, requireUnlocked = true) => {
+    if (generation !== generationRef.current || !policy.evaluate()) return false;
     if (stateRef.current.status === "demo") return true;
+    if (requireUnlocked && stateRef.current.status !== "unlocked") return false;
     getVaultUserId(); // Check wall-clock expiry even after browser suspension.
     return true;
   };
 
-  // One absolute timer for the authentication lifetime, including time locked.
-  useEffect(() => {
-    if (!deadline) return;
-    const timer = setTimeout(() => endSession("Your secure session ended. Sign in again."), Math.max(0, deadline - Date.now()));
-    return () => clearTimeout(timer);
-  }, [deadline, endSession]);
-  useEffect(() => {
-    if (!deadline) return;
-    let idleTimer: ReturnType<typeof setTimeout>;
-    const resetIdle = () => {
-      clearTimeout(idleTimer);
-      if (sessionDeadline(stateRef.current)) {
-        idleTimer = setTimeout(() => lock("Your vault locked after 5 minutes of inactivity."), 5 * 60_000);
+  const policy = useVaultPolicy({
+    expiresAt: deadline,
+    unlocked: vaultState.status === "unlocked" || demo,
+    authenticated: !!deadline,
+    lock, expire: endSession,
+    conceal: (background) => {
+      clearPlaintext();
+      setPreviewId(null);
+      // Cancel local passphrase derivation/drafts without cancelling WebAuthn.
+      if (background && stateRef.current.status === "locked") clearSensitiveState();
+    },
+    validate: async () => {
+      const current = authenticationGeneration.current;
+      await validateVaultSession();
+      if (current !== authenticationGeneration.current) return;
+      const state = stateRef.current;
+      if (state.status === "locked" || state.status === "unlocked") {
+        transition({ ...state, expiresAt: Math.min(state.expiresAt, getVaultSessionDeadline()) });
       }
-    };
-    const resume = () => {
-      if (document.visibilityState !== "visible") return;
-      if (stateRef.current.status === "unlocked") lock();
-      const current = generationRef.current;
-      void validateVaultSession().then(() => {
-        if (current !== generationRef.current) return;
-        const state = stateRef.current;
-        if (state.status === "locked") transition({ ...state, expiresAt: Math.min(state.expiresAt, getVaultSessionDeadline()) });
-      }).catch(err => {
-        if (current === generationRef.current) handleVaultError(err);
-      });
-    };
-    const visibility = () => {
-      if (document.visibilityState === "hidden") lock("Your vault locked when you left this tab.");
-      else resume();
-    };
-    const pageshow = (event: PageTransitionEvent) => {
-      if (event.persisted) lock();
-      resume();
-    };
-    const events = ["pointerdown", "keydown", "wheel"] as const;
-    events.forEach(event => window.addEventListener(event, resetIdle, { passive: true }));
-    document.addEventListener("visibilitychange", visibility);
-    window.addEventListener("focus", resume);
-    window.addEventListener("pageshow", pageshow);
-    resetIdle();
-    return () => {
-      clearTimeout(idleTimer);
-      events.forEach(event => window.removeEventListener(event, resetIdle));
-      document.removeEventListener("visibilitychange", visibility);
-      window.removeEventListener("focus", resume);
-      window.removeEventListener("pageshow", pageshow);
-    };
-  }, [deadline, vaultState.status, lock, handleVaultError, transition]);
+    },
+    failure: handleVaultError,
+  });
+  const canRevealContent = useCallback(() => policy.evaluate() &&
+    document.visibilityState === "visible" && !document.documentElement.dataset.havenConcealed,
+  [policy.evaluate]);
+  const canUseVault = () => canRevealContent() &&
+    (stateRef.current.status === "unlocked" || stateRef.current.status === "demo");
+  const privacyScreen = createPortal(<div className="privacy-screen" role="status" aria-live="polite" aria-hidden={!policy.concealed}>
+    <strong>Haven is concealed</strong>
+    <span>Checking your secure session before showing content.</span>
+    <div className="privacy-actions">
+      <button className="button secondary" disabled={vaultState.status === "signed-out"} onClick={() => lock()}>Lock now</button>
+      <button className="button secondary" onClick={() => endSession()}>Sign out now</button>
+    </div>
+  </div>, document.body);
+  const securitySettings = <SecuritySettings preferences={policy.preferences}
+    onChange={policy.updatePreferences} storageFailed={policy.storageFailed}
+    lifetimeMinutes={deadline ? getVaultSessionLifetimeMinutes() : null} />;
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -408,7 +402,7 @@ export default function App() {
       transition({ status: "locked", expiresAt, config: undefined });
       const config = await getVaultConfig();
       if (current !== authenticationGeneration.current) return;
-      if (!workIsCurrent(work)) return;
+      getVaultUserId();
       transition({ status: "locked", expiresAt, config });
       setPassphrase("");
       setConfirmPassphrase("");
@@ -447,9 +441,9 @@ export default function App() {
     setConfirmPassphrase("");
     try {
       await validateVaultSession();
-      if (!workIsCurrent(current) || document.visibilityState !== "visible") return;
+      if (!workIsCurrent(current, false) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
       const config = await getVaultConfig();
-      if (!workIsCurrent(current)) return;
+      if (!workIsCurrent(current, false)) return;
       if (config === null && state.config === undefined) {
         transition({ status: "locked", expiresAt: state.expiresAt, config: null });
         return;
@@ -458,7 +452,7 @@ export default function App() {
       let encryptionConfig: VaultConfig;
       if (config === null) {
         const created = await createVault(secret);
-        if (!workIsCurrent(current)) return;
+        if (!workIsCurrent(current, false)) return;
         await saveVaultConfig(created.config);
         key = created.key;
         encryptionConfig = created.config;
@@ -466,12 +460,12 @@ export default function App() {
         encryptionConfig = config;
         key = await unlockVault(secret, config);
       }
-      if (!workIsCurrent(current)) return;
+      if (!workIsCurrent(current, false)) return;
       // Keep the saved config if loading fails or a later unlock is needed.
       transition({ status: "locked", expiresAt: state.expiresAt, config: encryptionConfig });
       const loaded = await listVaultItems(key);
       await validateVaultSession();
-      if (!workIsCurrent(current) || document.visibilityState !== "visible") return;
+      if (!workIsCurrent(current, false) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
       transition({ status: "unlocked", expiresAt: getVaultSessionDeadline(), config: encryptionConfig, key });
       setItems(loaded);
       setSection("My vault");
@@ -485,6 +479,7 @@ export default function App() {
     }
   };
   const changeItem = async (item: DisplayItem, changes: Partial<DisplayItem>) => {
+    if (!canUseVault()) return;
     const next = { ...item, ...changes, updatedAt: Date.now() };
     const current = generationRef.current;
     try {
@@ -506,6 +501,7 @@ export default function App() {
     if (current === generationRef.current) setMenuId(null);
   };
   const upload = async (files: FileList | File[]) => {
+    if (!canUseVault()) return;
     if (demo) {
       openModal("setup");
       return;
@@ -545,6 +541,7 @@ export default function App() {
   };
   const saveNote = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canUseVault()) return;
     if (demo) {
       openModal("setup");
       return;
@@ -573,6 +570,7 @@ export default function App() {
     }
   };
   const download = async (item: DisplayItem) => {
+    if (!canUseVault()) return;
     const current = generationRef.current;
     try {
       let blob: Blob;
@@ -593,6 +591,7 @@ export default function App() {
             : await downloadVaultFile(vaultKey, item);
       }
       if (!workIsCurrent(current)) return;
+      if (document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
       const url = createPlaintextUrl(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -607,6 +606,7 @@ export default function App() {
     }
   };
   const deletePermanently = async () => {
+    if (!canUseVault()) return;
     if (!deleteItem) return;
     const current = generationRef.current;
     setBusy(true);
@@ -626,6 +626,7 @@ export default function App() {
   const contentModal =
     modal === "setup" ? (
       <Modal
+        concealed={policy.concealed}
         title={isFirebaseConfigured ? "Your vault is ready to connect" : "Make this space yours"}
         onClose={() => setModal(null)}
       >
@@ -677,7 +678,7 @@ export default function App() {
         </button>
       </Modal>
     ) : modal === "help" ? (
-      <Modal title="A little peace of mind" onClose={() => setModal(null)}>
+      <Modal concealed={policy.concealed} title="A little peace of mind" onClose={() => setModal(null)}>
         <p className="muted">Haven is your private home for photos, documents, and notes.</p>
         <div className="help-item">
           <Fingerprint />
@@ -714,7 +715,7 @@ export default function App() {
           <div>
             <h3>Private by default</h3>
             <p>
-              Your vault locks after 5 minutes of inactivity or when you leave the tab. Locking keeps your session active. Sign out ends access on this device, as does session expiry (at most 15 minutes).
+              Content is concealed immediately when you leave the tab. By default, the key is cleared after 30 seconds away or 5 minutes idle. Choose timings in Security. Locking keeps authentication active until its administrator-controlled expiry; Sign out ends it immediately on this device.
             </p>
           </div>
         </div>
@@ -724,6 +725,8 @@ export default function App() {
   if (screen !== "vault")
     return (
       <div className="auth-layout">
+        {privacyScreen}
+        {policy.warning && <SessionWarning />}
         <aside className="auth-story">
           <Brand light />
           <div className="auth-story-content">
@@ -911,6 +914,7 @@ export default function App() {
                 </button>
               </form>
             )}
+            {deadline > 0 && securitySettings}
             <div className="auth-reassurance">
               <LockKeyhole size={13} /> Your passphrase is never stored or shared.
             </div>
@@ -960,6 +964,8 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {privacyScreen}
+      {policy.warning && <SessionWarning />}
       {mobileNav && <div className="nav-overlay" onClick={() => setMobileNav(false)} />}
       <aside className={`sidebar ${mobileNav ? "nav-open" : ""}`}>
         <Brand />
@@ -1127,6 +1133,7 @@ export default function App() {
                   status={demo ? "Preview · sample data" : "Vault decrypted in memory"}
                 />
               </section>
+              {securitySettings}
               <div className="security-details">
                 <h2>The little details that keep you safe</h2>
                 {[
@@ -1134,7 +1141,7 @@ export default function App() {
                     icon: <Clock3 />,
                     title: "Automatic locking",
                     description:
-                      "After 5 minutes idle or when you leave the tab. Locking preserves authentication; the 15-minute session expiry signs you out.",
+                      "Content is concealed immediately. Your chosen background and inactivity deadlines clear the key. The separate server session expiry signs you out.",
                   },
                   {
                     icon: <Cloud />,
@@ -1541,6 +1548,7 @@ export default function App() {
           vaultKey={vaultKey}
           onClose={() => setPreviewId(null)}
           onAuthenticationFailure={handleVaultError}
+          canReveal={canRevealContent}
           onDownload={(item) => void download(item)}
           onStep={(offset) => {
             const index = visibleItems.findIndex((item) => item.id === preview.id);
@@ -1553,6 +1561,7 @@ export default function App() {
       )}
       {modal === "upload" && (
         <Modal
+        concealed={policy.concealed}
           title="A safe place for your files"
           onClose={() => {
             if (!busy) setModal(null);
@@ -1613,6 +1622,7 @@ export default function App() {
       )}
       {modal === "note" && (
         <Modal
+        concealed={policy.concealed}
           title="A little note to yourself"
           onClose={() => {
             if (!busy) setModal(null);
@@ -1658,7 +1668,7 @@ export default function App() {
         </Modal>
       )}
       {modal === "collection" && (
-        <Modal title="A place for everything" onClose={() => setModal(null)}>
+        <Modal concealed={policy.concealed} title="A place for everything" onClose={() => setModal(null)}>
           <p className="muted">
             Give related files a little home of their own. Collections are saved with the files you
             add to them.
@@ -1706,6 +1716,7 @@ export default function App() {
       {contentModal}
       {deleteItem && (
         <Modal
+        concealed={policy.concealed}
           title="Delete this file permanently?"
           onClose={() => {
             if (!busy) setDeleteItem(null);
@@ -1745,6 +1756,10 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function SessionWarning() {
+  return <div className="session-warning" role="alert">Your authentication session ends in less than a minute. Completed uploads remain saved. Unfinished uploads and unsaved edits may be lost. Sign in again with your passkey after expiry, then unlock with your passphrase.</div>;
 }
 
 function SecurityCard({

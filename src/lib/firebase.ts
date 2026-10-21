@@ -13,6 +13,7 @@ import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
 import { connectFunctionsEmulator, getFunctions, httpsCallable } from 'firebase/functions'
 import { connectStorageEmulator, getStorage } from 'firebase/storage'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
+import { createSecurityClock } from './lockPolicy'
 import { localFirebaseConfig, emulatorPorts } from './local-config'
 
 export const isEmulatorMode = import.meta.env.MODE === 'emulator'
@@ -63,8 +64,11 @@ if (isEmulatorMode && auth && db && storage && functions) {
   connectFunctionsEmulator(functions, '127.0.0.1', emulatorPorts.functions)
 }
 
-// Keep the browser deadline inside the server's 15-minute session window.
-export const VAULT_SESSION_DURATION_MS = 14 * 60 * 1000 + 45 * 1000
+// Server timing is authoritative; this is only a conservative client margin.
+const SESSION_SAFETY_MARGIN_MS = 15_000
+let sessionNow = createSecurityClock()
+let sessionDurationMinutes: number | null = null
+export function getVaultSessionLifetimeMinutes() { return sessionDurationMinutes }
 let activeVaultUid: string | null = null
 let localSessionExpiresAt = 0
 let authenticationPending = false
@@ -80,7 +84,13 @@ function checkAuthenticationGeneration(generation: number) {
 type RegistrationOptions = Parameters<typeof startRegistration>[0]['optionsJSON']
 type AuthenticationOptions = Parameters<typeof startAuthentication>[0]['optionsJSON']
 type ChallengeResponse<T> = { options: T; challengeId: string }
-type TokenResponse = { token: string; expiresAtMs: number; serverNowMs: number }
+type SessionTiming = { expiresAtMs: number; serverNowMs: number; sessionDurationMinutes: number }
+type TokenResponse = SessionTiming & { token: string }
+function validTiming(data: SessionTiming) {
+  const remaining = data.expiresAtMs - data.serverNowMs
+  return Number.isFinite(remaining) && remaining > 0 &&
+    [15, 30, 60].includes(data.sessionDurationMinutes) && remaining <= data.sessionDurationMinutes * 60_000
+}
 type ConfirmRegistration = (
   createPasskey: () => ReturnType<typeof startRegistration>,
 ) => ReturnType<typeof startRegistration>
@@ -101,6 +111,7 @@ function requireServices() {
 function clearLocalSession() {
   activeVaultUid = null
   localSessionExpiresAt = 0
+  sessionDurationMinutes = null
 }
 
 export class VaultAuthenticationError extends Error {}
@@ -122,12 +133,12 @@ export function getVaultSessionDeadline(): number {
 export async function validateVaultSession(): Promise<void> {
   const uid = getVaultUserId()
   const generation = authenticationGeneration
-  const startedAt = Date.now()
+  const startedAt = sessionNow()
   const { functions } = requireServices()
-  const check = httpsCallable<Record<string, never>, { expiresAtMs: number; serverNowMs: number }>(
+  const check = httpsCallable<Record<string, never>, SessionTiming>(
     functions, 'validateVaultSession', { timeout: 4000 },
   )
-  let data: { expiresAtMs: number; serverNowMs: number }
+  let data: SessionTiming
   try {
     ;({ data } = await check({}))
   } catch (error) {
@@ -136,23 +147,22 @@ export async function validateVaultSession(): Promise<void> {
   }
   checkAuthenticationGeneration(generation)
   if (getVaultUserId() !== uid) throw new VaultAuthenticationError('Your vault session has ended.')
-  if (!Number.isFinite(data.expiresAtMs) || !Number.isFinite(data.serverNowMs)) {
+  if (!validTiming(data) || data.sessionDurationMinutes !== sessionDurationMinutes) {
     throw new Error('The server could not confirm your session. Please try again.')
   }
   // Request start is conservative about latency. Never move the deadline later,
   // even if this check is repeated or the server clock differs from this device.
   localSessionExpiresAt = Math.min(localSessionExpiresAt,
-    startedAt + data.expiresAtMs - data.serverNowMs - 15_000)
+    startedAt + data.expiresAtMs - data.serverNowMs - SESSION_SAFETY_MARGIN_MS)
   getVaultUserId()
 }
 
 async function acceptVaultToken(response: TokenResponse, verificationStartedAt: number) {
   const { token, expiresAtMs, serverNowMs } = response
   const services = requireServices()
-  if (typeof token !== 'string' || token.length === 0 || !Number.isFinite(expiresAtMs) || !Number.isFinite(serverNowMs)) {
+  if (typeof token !== 'string' || token.length === 0 || !validTiming(response)) {
     throw new Error('The server did not return a valid vault session.')
   }
-  const acceptedAt = Date.now()
   const credential = await signInWithCustomToken(services.auth, token)
   const { claims } = await credential.user.getIdTokenResult()
   if (
@@ -165,8 +175,8 @@ async function acceptVaultToken(response: TokenResponse, verificationStartedAt: 
   activeVaultUid = credential.user.uid
   // Rules and callable functions independently enforce the server session
   // deadline; this deadline only makes the client fail closed sooner.
-  localSessionExpiresAt = Math.min(acceptedAt + VAULT_SESSION_DURATION_MS,
-    verificationStartedAt + expiresAtMs - serverNowMs - 15_000)
+  sessionDurationMinutes = response.sessionDurationMinutes
+  localSessionExpiresAt = verificationStartedAt + expiresAtMs - serverNowMs - SESSION_SAFETY_MARGIN_MS
   getVaultUserId()
 }
 
@@ -175,6 +185,7 @@ export async function enrollPasskey(confirmRegistration: ConfirmRegistration): P
   const services = requireServices()
   if (authenticationPending) throw new Error('A passkey request is still finishing. Please try again in a moment.')
   authenticationPending = true
+  sessionNow = createSecurityClock()
   const generation = ++authenticationGeneration
   clearLocalSession()
   try {
@@ -202,7 +213,7 @@ export async function enrollPasskey(confirmRegistration: ConfirmRegistration): P
       { challengeId: string; response: typeof response },
       TokenResponse
     >(services.functions, 'verifyRegistration')
-    const verificationStartedAt = Date.now()
+    const verificationStartedAt = sessionNow()
     const result = await verifyCall({ challengeId: data.challengeId, response })
     checkAuthenticationGeneration(generation)
     await acceptVaultToken(result.data, verificationStartedAt)
@@ -221,6 +232,7 @@ export async function signInWithPasskey(): Promise<void> {
   const services = requireServices()
   if (authenticationPending) throw new Error('A passkey request is still finishing. Please try again in a moment.')
   authenticationPending = true
+  sessionNow = createSecurityClock()
   const generation = ++authenticationGeneration
   clearLocalSession()
   try {
@@ -239,7 +251,7 @@ export async function signInWithPasskey(): Promise<void> {
       { challengeId: string; response: typeof response },
       TokenResponse
     >(services.functions, 'verifyAuthentication')
-    const verificationStartedAt = Date.now()
+    const verificationStartedAt = sessionNow()
     const result = await verifyCall({ challengeId: data.challengeId, response })
     checkAuthenticationGeneration(generation)
     await acceptVaultToken(result.data, verificationStartedAt)
@@ -281,7 +293,7 @@ export function getVaultUserId(): string {
     !auth?.currentUser ||
     !activeVaultUid ||
     auth.currentUser.uid !== activeVaultUid ||
-    Date.now() >= localSessionExpiresAt
+    sessionNow() >= localSessionExpiresAt
   ) {
     clearLocalSession()
     throw new VaultAuthenticationError('Your vault session has ended. Verify your identity again.')

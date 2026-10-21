@@ -7,7 +7,7 @@ import { isAuthenticationFailure, getVaultUserId } from '../lib/firebase';
 import { createPlaintextUrl, revokePlaintextUrl, plaintextGeneration, plaintextIsCurrent } from '../lib/plaintext';
 const PdfPreview = lazy(() => import('./PdfPreview'));
 
-export default function Preview({ item, vaultKey, onClose, onStep, onDownload, onAuthenticationFailure }: { item: DisplayItem; vaultKey: CryptoKey | null; onClose: () => void; onStep: (offset: number) => void; onDownload: (item: DisplayItem) => void; onAuthenticationFailure: (error: unknown) => void }) {
+export default function Preview({ item, vaultKey, onClose, onStep, onDownload, onAuthenticationFailure, canReveal }: { item: DisplayItem; vaultKey: CryptoKey | null; onClose: () => void; onStep: (offset: number) => void; onDownload: (item: DisplayItem) => void; onAuthenticationFailure: (error: unknown) => void; canReveal?: () => boolean }) {
   const [url, setUrl] = useState(item.demoUrl || '');
   const [text, setText] = useState(item.text || '');
   const [busy, setBusy] = useState(false);
@@ -30,7 +30,8 @@ export default function Preview({ item, vaultKey, onClose, onStep, onDownload, o
     let cancelled = false;
     let objectUrl = '';
     const generation = plaintextGeneration();
-    const active = () => !cancelled && plaintextIsCurrent(generation);
+    const active = () => !cancelled && plaintextIsCurrent(generation) &&
+      document.visibilityState === 'visible' && !document.documentElement.dataset.havenConcealed && (canReveal?.() ?? true);
     setUrl(item.demoUrl || ''); setText(item.text || ''); setError(''); setScale(1); setPosition({ x: 0, y: 0 }); pointers.current.clear(); lastDistance.current = 0;
     if (!item.demoUrl && item.kind !== 'note' && !sampleDocument && vaultKey && (isPhoto || isPdf || isText)) {
       setBusy(true);
@@ -48,7 +49,7 @@ export default function Preview({ item, vaultKey, onClose, onStep, onDownload, o
       }).catch(err => { if (active()) { if (isAuthenticationFailure(err)) onAuthenticationFailure(err); else setError(err instanceof Error ? err.message : 'Unable to decrypt preview.'); } }).finally(() => { if (active()) setBusy(false); });
     } else setBusy(false);
     return () => { cancelled = true; if (objectUrl) revokePlaintextUrl(objectUrl); };
-  }, [item, vaultKey, isPhoto, isPdf, isText, sampleDocument, onAuthenticationFailure]);
+  }, [item, vaultKey, isPhoto, isPdf, isText, sampleDocument, onAuthenticationFailure, canReveal]);
 
   const zoom = (next: number) => { setScale(Math.max(0.5, Math.min(5, next))); };
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
