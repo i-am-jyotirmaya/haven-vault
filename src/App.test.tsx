@@ -296,6 +296,7 @@ describe('configurable locking and privacy boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New note' }));
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Private draft' } });
     hide(); expect(concealed()).toBe(true);
+    expect(HTMLDialogElement.prototype.close).toHaveBeenCalled();
     expect(mocks.signOut).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(29_999));
     let finish!: () => void;

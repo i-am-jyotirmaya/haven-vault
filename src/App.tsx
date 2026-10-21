@@ -626,6 +626,7 @@ export default function App() {
   const contentModal =
     modal === "setup" ? (
       <Modal
+        concealed={policy.concealed}
         title={isFirebaseConfigured ? "Your vault is ready to connect" : "Make this space yours"}
         onClose={() => setModal(null)}
       >
@@ -677,7 +678,7 @@ export default function App() {
         </button>
       </Modal>
     ) : modal === "help" ? (
-      <Modal title="A little peace of mind" onClose={() => setModal(null)}>
+      <Modal concealed={policy.concealed} title="A little peace of mind" onClose={() => setModal(null)}>
         <p className="muted">Haven is your private home for photos, documents, and notes.</p>
         <div className="help-item">
           <Fingerprint />
@@ -1560,6 +1561,7 @@ export default function App() {
       )}
       {modal === "upload" && (
         <Modal
+        concealed={policy.concealed}
           title="A safe place for your files"
           onClose={() => {
             if (!busy) setModal(null);
@@ -1620,6 +1622,7 @@ export default function App() {
       )}
       {modal === "note" && (
         <Modal
+        concealed={policy.concealed}
           title="A little note to yourself"
           onClose={() => {
             if (!busy) setModal(null);
@@ -1665,7 +1668,7 @@ export default function App() {
         </Modal>
       )}
       {modal === "collection" && (
-        <Modal title="A place for everything" onClose={() => setModal(null)}>
+        <Modal concealed={policy.concealed} title="A place for everything" onClose={() => setModal(null)}>
           <p className="muted">
             Give related files a little home of their own. Collections are saved with the files you
             add to them.
@@ -1713,6 +1716,7 @@ export default function App() {
       {contentModal}
       {deleteItem && (
         <Modal
+        concealed={policy.concealed}
           title="Delete this file permanently?"
           onClose={() => {
             if (!busy) setDeleteItem(null);
