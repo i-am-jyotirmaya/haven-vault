@@ -5,7 +5,7 @@ import { LockPolicy, readLockPreferences, writeLockPreferences, parseLockPrefere
 export function useVaultPolicy(options: {
   expiresAt: number; unlocked: boolean; authenticated: boolean
   lock: (message?: string) => void; expire: (message?: string) => void
-  conceal: () => void; validate: () => Promise<void>; failure: (error: unknown) => void
+  conceal: (background: boolean) => void; validate: () => Promise<void>; failure: (error: unknown) => void
 }) {
   const [preferences, setPreferences] = useState(readLockPreferences)
   const [warning, setWarning] = useState(false)
@@ -61,7 +61,7 @@ export function useVaultPolicy(options: {
       checking = false
       conceal()
       model.hide()
-      callbacks.current.conceal()
+      callbacks.current.conceal(true)
       evaluate()
       schedule()
     }
@@ -72,6 +72,7 @@ export function useVaultPolicy(options: {
       flushSync(() => { valid = evaluate() })
       if (!valid) { model.returned(); reveal(); schedule(); return }
       if (!callbacks.current.authenticated) { model.returned(); reveal(); return }
+      callbacks.current.conceal(false)
       checking = true
       const generation = ++resumeGeneration
       try {
@@ -99,8 +100,10 @@ export function useVaultPolicy(options: {
     const pageshow = () => { void resume() }
     const activity = (event: Event) => {
       if (document.visibilityState !== 'visible' || document.documentElement.dataset.havenConcealed) return
+      // Editing timeout controls must not give a shorter setting a fresh budget.
+      const editingPolicy = event.target instanceof Element && !!event.target.closest('.security-settings')
       // Reject overdue access before allowing this interaction to move inactivity.
-      if (evaluate() && event.isTrusted) model.activity()
+      if (evaluate() && event.isTrusted && !editingPolicy) model.activity()
     }
     const events = ['keydown', 'pointerdown', 'pointermove', 'touchstart', 'touchmove', 'wheel']
     events.forEach(event => window.addEventListener(event, activity, { passive: true, capture: true }))

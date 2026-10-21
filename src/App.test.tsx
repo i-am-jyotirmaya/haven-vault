@@ -284,3 +284,245 @@ describe('authentication and local encryption transitions', () => {
     expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
   });
 });
+
+describe('configurable locking and privacy boundary', () => {
+  const concealed = () => document.documentElement.dataset.havenConcealed === 'true';
+  const security = () => {
+    fireEvent.click(screen.getByRole('button', { name: /Your security/ }));
+    fireEvent.click(screen.getByText('Automatic locking settings'));
+  };
+  it('conceals immediately, gates return on validation, and returns within grace without unlocking', async () => {
+    await openVault();
+    fireEvent.click(screen.getByRole('button', { name: 'New note' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Private draft' } });
+    hide(); expect(concealed()).toBe(true);
+    expect(mocks.signOut).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(29_999));
+    let finish!: () => void;
+    mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    show(); expect(concealed()).toBe(true);
+    await act(async () => finish());
+    expect(concealed()).toBe(false);
+    expect(screen.getByLabelText('Title')).toHaveProperty('value', 'Private draft');
+    expect(mocks.unlock).toHaveBeenCalledOnce();
+    expect(mocks.signIn).toHaveBeenCalledOnce();
+  });
+  it('return after grace clears drafts and requires only passphrase', async () => {
+    await openVault(); hide();
+    vi.setSystemTime(Date.now() + 30_000); // Sleeping tab: no timer callbacks.
+    show(); await flush();
+    expect(concealed()).toBe(false);
+    expect(screen.queryByText(file.name)).toBeNull();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    await unlock();
+    expect(mocks.unlock).toHaveBeenCalledTimes(2);
+    expect(mocks.signIn).toHaveBeenCalledOnce();
+  });
+  it('immediate-lock mode clears keys at hide, before any timer', async () => {
+    localStorage.setItem('haven.security.v1', JSON.stringify({ backgroundSeconds: 0, inactivityMinutes: 5 }));
+    await openVault(); hide();
+    expect(concealed()).toBe(true);
+    expect(screen.queryByText(file.name)).toBeNull();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    expect(mocks.signOut).not.toHaveBeenCalled();
+    show(); await flush();
+    expect(screen.queryByText(file.name)).toBeNull();
+  });
+  it.each([1, 5, 15])('locks after the configured %s minutes of inactivity', async minutes => {
+    mocks.deadline = Date.now() + 3_600_000;
+    localStorage.setItem('haven.security.v1', JSON.stringify({ backgroundSeconds: 30, inactivityMinutes: minutes }));
+    await openVault();
+    act(() => vi.advanceTimersByTime(minutes * 60_000 - 1));
+    expect(screen.getByRole('button', { name: 'Lock vault' })).toBeTruthy();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    expect(mocks.signOut).not.toHaveBeenCalled();
+  });
+  it.each(['keydown', 'pointerdown', 'pointermove', 'touchstart', 'touchmove', 'wheel'])('%s activity resets inactivity without extending authentication', async type => {
+    const listener = vi.spyOn(window, 'addEventListener');
+    await openVault();
+    act(() => vi.advanceTimersByTime(240_000));
+    const callback = listener.mock.calls.find(([name]) => name === type)![1] as EventListener;
+    act(() => callback({ isTrusted: true } as Event));
+    act(() => vi.advanceTimersByTime(240_000));
+    expect(screen.getByRole('button', { name: 'Lock vault' })).toBeTruthy();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    act(() => vi.advanceTimersByTime(mocks.deadline - Date.now()));
+    expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
+  });
+  it('network completion and synthetic events do not count as activity', async () => {
+    await openVault();
+    act(() => vi.advanceTimersByTime(240_000));
+    fireEvent.pointerMove(window); fireEvent.wheel(window); await mocks.validate();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+  it.each(['focus', 'pageshow', 'resume'])('%s enforces suspended inactivity before revealing', async type => {
+    await openVault();
+    vi.setSystemTime(Date.now() + 300_000);
+    fireEvent(type === 'resume' ? document : window, new Event(type));
+    expect(screen.queryByText(file.name)).toBeNull();
+    await flush();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+  it('repeated hidden lifecycle events never restart grace', async () => {
+    await openVault(); hide(); act(() => vi.advanceTimersByTime(20_000));
+    fireEvent(window, new Event('pagehide')); fireEvent(document, new Event('freeze'));
+    act(() => vi.advanceTimersByTime(10_000)); show(); await flush();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+  it('authentication expires while hidden even after the vault has locked', async () => {
+    await openVault(); hide();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(mocks.signOut).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(mocks.deadline - Date.now()));
+    expect(mocks.signOut).toHaveBeenCalledOnce();
+    expect(concealed()).toBe(true);
+    show(); await flush();
+    expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
+  });
+  it('expiry during return validation cannot flash or restore content', async () => {
+    mocks.deadline = Date.now() + 20_000;
+    await openVault(); hide();
+    let finish!: () => void;
+    mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    show(); expect(concealed()).toBe(true);
+    vi.setSystemTime(mocks.deadline);
+    await act(async () => finish());
+    expect(concealed()).toBe(false);
+    expect(screen.queryByText(file.name)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
+  });
+  it('shortening inactivity and restoring defaults apply time already elapsed', async () => {
+    await openVault(); security();
+    act(() => vi.advanceTimersByTime(120_000));
+    fireEvent.change(screen.getByLabelText('Lock after inactivity'), { target: { value: '1' } });
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('haven.security.v1')!)).toEqual({ backgroundSeconds: 30, inactivityMinutes: 1 });
+    fireEvent.click(screen.getByText('Automatic locking settings'));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore defaults' }));
+    expect(JSON.parse(localStorage.getItem('haven.security.v1')!)).toEqual({ backgroundSeconds: 30, inactivityMinutes: 5 });
+  });
+  it('warns before expiry while locked without claiming unfinished work is saved', async () => {
+    render(<App />); await authenticate();
+    act(() => vi.advanceTimersByTime(825_000));
+    expect(screen.getByRole('alert').textContent).toContain('Completed uploads remain saved. Unfinished uploads and unsaved edits may be lost.');
+    expect(mocks.signIn).toHaveBeenCalledOnce();
+    expect(mocks.signOut).not.toHaveBeenCalled();
+  });
+  it('backgrounding enrollment does not cancel its passkey ceremony', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Set up my private vault' })); await flush();
+    hide(); show(); await flush();
+    fireEvent.click(screen.getByRole('button', { name: 'Create my passkey' })); await flush();
+    expect(mocks.enroll).toHaveBeenCalledOnce();
+    expect(mocks.signOut).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+  it('reload/unmount never restores keys; only non-sensitive preferences survive', async () => {
+    await openVault(); cleanup();
+    render(<App />);
+    expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
+    expect(screen.queryByText(file.name)).toBeNull();
+    expect(localStorage.length).toBe(0);
+  });
+});
+
+describe('deadline races', () => {
+  it('background grace includes time spent validating on return', async () => {
+    await openVault(); hide();
+    act(() => vi.advanceTimersByTime(29_000));
+    let finish!: () => void;
+    mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    show();
+    vi.setSystemTime(Date.now() + 2000);
+    await act(async () => finish());
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    expect(screen.queryByText(file.name)).toBeNull();
+  });
+  it('manual lock during return validation cannot be undone by its late success', async () => {
+    await openVault(); hide();
+    let finish!: () => void;
+    mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    show(); fireEvent.keyDown(window, { key: 'L', ctrlKey: true, shiftKey: true });
+    await act(async () => finish());
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+    expect(screen.queryByText(file.name)).toBeNull();
+    expect(mocks.unlock).toHaveBeenCalledOnce();
+  });
+  it('a preview completing after suspended inactivity clears content before creating plaintext URLs', async () => {
+    await openVault();
+    let finish!: (value: Blob) => void;
+    mocks.download.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: `Preview ${file.name}` }));
+    vi.setSystemTime(Date.now() + 300_000);
+    await act(async () => finish(new Blob(['private'])));
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+  it('expired access cannot start new work from an old event handler', async () => {
+    await openVault();
+    fireEvent.click(screen.getByRole('button', { name: 'New note' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'No longer authorized' } });
+    const form = screen.getByLabelText('Title').closest('form')!;
+    vi.setSystemTime(Date.now() + 300_000);
+    fireEvent.submit(form); await flush();
+    expect(mocks.saveNote).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+  it('an async save completed during grace stays concealed and cannot unlock a locked vault', async () => {
+    await openVault();
+    fireEvent.click(screen.getByRole('button', { name: 'New note' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Saved in background' } });
+    let finish!: (value: unknown) => void;
+    mocks.saveNote.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    fireEvent.submit(screen.getByLabelText('Title').closest('form')!);
+    hide(); await act(async () => finish({ ...file, id: 'background-note', name: 'Saved in background' }));
+    expect(document.documentElement.dataset.havenConcealed).toBe('true');
+    act(() => vi.advanceTimersByTime(30_000)); show(); await flush();
+    expect(screen.queryByText('Saved in background')).toBeNull();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+  });
+});
+
+it('privacy-screen lock and sign-out controls remain available during return validation', async () => {
+  await openVault(); hide();
+  let finish!: () => void;
+  mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+  show();
+  fireEvent.click(screen.getByRole('button', { name: 'Lock now' }));
+  expect(screen.queryByText(file.name)).toBeNull();
+  expect(mocks.signOut).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out now' }));
+  await act(async () => finish());
+  expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
+  expect(mocks.signOut).toHaveBeenCalledOnce();
+});
+
+it('unmount cleans lifecycle listeners and scheduled deadline timers', async () => {
+  const remove = vi.spyOn(window, 'removeEventListener');
+  await openVault(); cleanup();
+  // jsdom queues a zero-delay selectionchange when passphrase fields clear.
+  act(() => vi.advanceTimersByTime(0));
+  expect(vi.getTimerCount()).toBe(0);
+  for (const name of ['focus', 'pagehide', 'pageshow', 'keydown', 'pointerdown', 'touchstart', 'wheel']) {
+    expect(remove.mock.calls.some(([event]) => event === name)).toBe(true);
+  }
+  fireEvent(window, new Event('focus'));
+  expect(mocks.signOut).not.toHaveBeenCalled();
+});
+
+it('trusted interaction inside timeout controls cannot restart elapsed inactivity before shortening it', async () => {
+  const listener = vi.spyOn(window, 'addEventListener');
+  await openVault();
+  fireEvent.click(screen.getByRole('button', { name: /Your security/ }));
+  fireEvent.click(screen.getByText('Automatic locking settings'));
+  const control = screen.getByLabelText('Lock after inactivity');
+  act(() => vi.advanceTimersByTime(120_000));
+  const pointer = listener.mock.calls.find(([name]) => name === 'pointerdown')![1] as EventListener;
+  act(() => pointer({ isTrusted: true, target: control } as unknown as Event));
+  fireEvent.change(control, { target: { value: '1' } });
+  expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
+});

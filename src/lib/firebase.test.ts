@@ -291,3 +291,35 @@ describe('emulator isolation', () => {
     expect(mocks.initializeAuth).not.toHaveBeenCalled();
   });
 });
+
+describe('server timing and clock validation', () => {
+  it.each([15, 30, 60])('accepts the issued %s-minute lifetime without a 15-minute cap', async minutes => {
+    mocks.call.mockImplementation(async (name: string) => {
+      if (name === 'authenticationOptions') return { data: { options: {}, challengeId: 'challenge' } };
+      return { data: { token: 'server-token', expiresAtMs: Date.now() + minutes * 60_000, serverNowMs: Date.now(), sessionDurationMinutes: minutes } };
+    });
+    const session = await import('./firebase');
+    const start = Date.now(); await session.signInWithPasskey();
+    expect(session.getVaultSessionDeadline()).toBeGreaterThanOrEqual(start + minutes * 60_000 - 15_000);
+    expect(session.getVaultSessionLifetimeMinutes()).toBe(minutes);
+  });
+  it.each([0, 16, 90, Infinity])('rejects an invalid server-issued lifetime %s', async minutes => {
+    mocks.call.mockImplementation(async (name: string) => {
+      if (name === 'authenticationOptions') return { data: { options: {}, challengeId: 'challenge' } };
+      return { data: { token: 'server-token', expiresAtMs: Date.now() + 3_600_000, serverNowMs: Date.now(), sessionDurationMinutes: minutes } };
+    });
+    const session = await import('./firebase');
+    await expect(session.signInWithPasskey()).rejects.toThrow('valid vault session');
+    expect(() => session.getVaultUserId()).toThrow();
+  });
+  it('backward wall clock movement cannot bypass the original authentication budget', async () => {
+    let wall = 1_700_000_000_000, elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    const session = await import('./firebase'); await session.signInWithPasskey();
+    const deadline = session.getVaultSessionDeadline();
+    wall -= 86_400_000; elapsed += 3_600_000;
+    expect(() => session.getVaultUserId()).toThrow('ended');
+    expect(deadline).toBeGreaterThan(wall);
+  });
+});

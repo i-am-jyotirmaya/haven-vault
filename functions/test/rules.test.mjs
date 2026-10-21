@@ -166,3 +166,13 @@ test("revocation takes effect without issuing a new Firebase ID token", async ()
   await assertFails(getDoc(doc(context.firestore(), "users/owner/items/private")));
   await assertFails(getBytes(ref(context.storage(), "vaults/owner/private")));
 });
+
+test("freshly refreshed Firebase claims cannot revive an expired private session", async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const freshToken = environment.authenticatedContext(owner, {
+    ...claims(expiredId), iat: nowSeconds, auth_time: nowSeconds, exp: nowSeconds + 3600,
+  });
+  await assertFails(getDoc(doc(freshToken.firestore(), 'users/owner/items/private')));
+  await assertFails(getBytes(ref(freshToken.storage(), 'vaults/owner/private')));
+  await assertFails(setDoc(doc(freshToken.firestore(), 'users/owner/items/refreshed'), { payload: envelope }));
+});

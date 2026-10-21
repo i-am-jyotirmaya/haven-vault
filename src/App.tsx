@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -244,9 +245,10 @@ export default function App() {
     if (isAuthenticationFailure(err)) endSession("Your secure session ended. Sign in again.");
     else setError(errorMessage(err));
   }, [endSession]);
-  const workIsCurrent = (generation: number) => {
+  const workIsCurrent = (generation: number, requireUnlocked = true) => {
     if (generation !== generationRef.current || !policy.evaluate()) return false;
     if (stateRef.current.status === "demo") return true;
+    if (requireUnlocked && stateRef.current.status !== "unlocked") return false;
     getVaultUserId(); // Check wall-clock expiry even after browser suspension.
     return true;
   };
@@ -256,11 +258,11 @@ export default function App() {
     unlocked: vaultState.status === "unlocked" || demo,
     authenticated: !!deadline,
     lock, expire: endSession,
-    conceal: () => {
+    conceal: (background) => {
       clearPlaintext();
       setPreviewId(null);
       // Cancel local passphrase derivation/drafts without cancelling WebAuthn.
-      if (stateRef.current.status === "locked") clearSensitiveState();
+      if (background && stateRef.current.status === "locked") clearSensitiveState();
     },
     validate: async () => {
       const current = authenticationGeneration.current;
@@ -273,6 +275,19 @@ export default function App() {
     },
     failure: handleVaultError,
   });
+  const canRevealContent = useCallback(() => policy.evaluate() &&
+    document.visibilityState === "visible" && !document.documentElement.dataset.havenConcealed,
+  [policy.evaluate]);
+  const canUseVault = () => canRevealContent() &&
+    (stateRef.current.status === "unlocked" || stateRef.current.status === "demo");
+  const privacyScreen = createPortal(<div className="privacy-screen" role="status" aria-live="polite" aria-hidden={!policy.concealed}>
+    <strong>Haven is concealed</strong>
+    <span>Checking your secure session before showing content.</span>
+    <div className="privacy-actions">
+      <button className="button secondary" disabled={vaultState.status === "signed-out"} onClick={() => lock()}>Lock now</button>
+      <button className="button secondary" onClick={() => endSession()}>Sign out now</button>
+    </div>
+  </div>, document.body);
   const securitySettings = <SecuritySettings preferences={policy.preferences}
     onChange={policy.updatePreferences} storageFailed={policy.storageFailed}
     lifetimeMinutes={deadline ? getVaultSessionLifetimeMinutes() : null} />;
@@ -426,9 +441,9 @@ export default function App() {
     setConfirmPassphrase("");
     try {
       await validateVaultSession();
-      if (!workIsCurrent(current) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
+      if (!workIsCurrent(current, false) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
       const config = await getVaultConfig();
-      if (!workIsCurrent(current)) return;
+      if (!workIsCurrent(current, false)) return;
       if (config === null && state.config === undefined) {
         transition({ status: "locked", expiresAt: state.expiresAt, config: null });
         return;
@@ -437,7 +452,7 @@ export default function App() {
       let encryptionConfig: VaultConfig;
       if (config === null) {
         const created = await createVault(secret);
-        if (!workIsCurrent(current)) return;
+        if (!workIsCurrent(current, false)) return;
         await saveVaultConfig(created.config);
         key = created.key;
         encryptionConfig = created.config;
@@ -445,12 +460,12 @@ export default function App() {
         encryptionConfig = config;
         key = await unlockVault(secret, config);
       }
-      if (!workIsCurrent(current)) return;
+      if (!workIsCurrent(current, false)) return;
       // Keep the saved config if loading fails or a later unlock is needed.
       transition({ status: "locked", expiresAt: state.expiresAt, config: encryptionConfig });
       const loaded = await listVaultItems(key);
       await validateVaultSession();
-      if (!workIsCurrent(current) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
+      if (!workIsCurrent(current, false) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
       transition({ status: "unlocked", expiresAt: getVaultSessionDeadline(), config: encryptionConfig, key });
       setItems(loaded);
       setSection("My vault");
@@ -464,6 +479,7 @@ export default function App() {
     }
   };
   const changeItem = async (item: DisplayItem, changes: Partial<DisplayItem>) => {
+    if (!canUseVault()) return;
     const next = { ...item, ...changes, updatedAt: Date.now() };
     const current = generationRef.current;
     try {
@@ -485,6 +501,7 @@ export default function App() {
     if (current === generationRef.current) setMenuId(null);
   };
   const upload = async (files: FileList | File[]) => {
+    if (!canUseVault()) return;
     if (demo) {
       openModal("setup");
       return;
@@ -524,6 +541,7 @@ export default function App() {
   };
   const saveNote = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canUseVault()) return;
     if (demo) {
       openModal("setup");
       return;
@@ -552,6 +570,7 @@ export default function App() {
     }
   };
   const download = async (item: DisplayItem) => {
+    if (!canUseVault()) return;
     const current = generationRef.current;
     try {
       let blob: Blob;
@@ -587,6 +606,7 @@ export default function App() {
     }
   };
   const deletePermanently = async () => {
+    if (!canUseVault()) return;
     if (!deleteItem) return;
     const current = generationRef.current;
     setBusy(true);
@@ -704,6 +724,7 @@ export default function App() {
   if (screen !== "vault")
     return (
       <div className="auth-layout">
+        {privacyScreen}
         {policy.warning && <SessionWarning />}
         <aside className="auth-story">
           <Brand light />
@@ -942,6 +963,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {privacyScreen}
       {policy.warning && <SessionWarning />}
       {mobileNav && <div className="nav-overlay" onClick={() => setMobileNav(false)} />}
       <aside className={`sidebar ${mobileNav ? "nav-open" : ""}`}>
@@ -1525,6 +1547,7 @@ export default function App() {
           vaultKey={vaultKey}
           onClose={() => setPreviewId(null)}
           onAuthenticationFailure={handleVaultError}
+          canReveal={canRevealContent}
           onDownload={(item) => void download(item)}
           onStep={(offset) => {
             const index = visibleItems.findIndex((item) => item.id === preview.id);
