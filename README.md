@@ -60,7 +60,7 @@ sequenceDiagram
     participant Store as Firestore + Storage
     You->>Browser: Verify with device passkey
     Browser->>Auth: Signed single-use challenge
-    Auth-->>Browser: Firebase token + 15-minute session
+    Auth-->>Browser: Firebase token + absolute session expiry
     You->>Browser: Enter vault passphrase
     Browser->>Store: Request encrypted data
     Store-->>Browser: Ciphertext (valid session required)
@@ -69,7 +69,7 @@ sequenceDiagram
 
 First enrollment additionally requires the configured owner's verified Google account. The passphrase never goes to Firebase. A stolen database copy can still be subjected to offline passphrase guessing. An administrator who can deploy malicious JavaScript could capture future unlocks. Protect deployment access as carefully as the vault itself.
 
-Routine locking keeps your authenticated session active: enter only the passphrase to unlock locally. Signing out ends access on this device and attempts server revocation. The server session still expires after 15 minutes (the client signs out slightly earlier); neither locking nor unlocking renews it. Deploy the updated Functions before Hosting when upgrading; see [the lifecycle and upgrade notes](docs/ARCHITECTURE.md#authentication-lifecycle).
+Routine locking keeps your authenticated session active: enter only the passphrase to unlock locally. Signing out ends access on this device and attempts server revocation. New server sessions default to 60 minutes, configurable by the administrator to 15, 30, or 60 (the client signs out slightly earlier). Activity, locking, unlocking, and Firebase token refresh never renew them. Content is concealed immediately on backgrounding; the default key-clearing deadlines are 30 seconds away or 5 minutes inactive. Change device timings in Security → Automatic locking settings. Deploy the updated Functions before Hosting when upgrading; see [the lifecycle and upgrade notes](docs/ARCHITECTURE.md#authentication-lifecycle).
 
 ## Development checks
 

@@ -201,3 +201,12 @@ pnpm deploy:verify
 Backend scope deploys Functions, Firestore rules/indexes, and Storage rules without publishing Hosting. Hosting scope validates the existing backend before publishing the newly built frontend. Both run the local unit/config/policy checks. Run `pnpm test:local` before releases for integration and rules checks; Java/emulator downloads are not required by the cloud deployment command itself.
 
 These commands reuse the locally installed, locked Firebase CLI and your own signed-in account. Cloud infrastructure provisioning (billing, databases, bucket, Google provider, domains) still follows section 2; deployment does not silently create accounts, choose billing, or change domains. No live deployment is needed for [local development](LOCAL_DEVELOPMENT.md).
+
+
+## Configure authentication lifetime
+
+Set `AUTH_SESSION_MINUTES=60` in `functions/.env.<project-id>` (see `functions/.env.example`). The only supported values are `15`, `30`, and `60`; omitted means `60`. Invalid values fail deployment-plan validation and new session issuance. Redeploy Functions to apply it to **new** passkey sessions. Existing sessions retain their original persisted expiry and issued lifetime, even if the new value is longer.
+
+Deploy **Functions before Hosting** when upgrading this version: verification and `validateVaultSession` now return the issued lifetime alongside server time/expiry. Rules continue to check the original server record independently of refreshed Firebase tokens. No encryption/data migration or rule relaxation is needed.
+
+Use `pnpm deploy:plan` to validate the environment, then `pnpm deploy:cloud` for the checked local-command deployment. Local Security settings affect only background/inactivity locking, never the backend lifetime. The effective issued lifetime appears after authentication; the client ends access approximately 15 seconds early, plus request latency, rather than extending it.

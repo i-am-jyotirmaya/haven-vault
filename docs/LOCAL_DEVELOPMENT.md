@@ -69,3 +69,12 @@ These tests do not replace device checks for platform passkey UX, touch gestures
 - A wrong or unfocused passkey origin, lost local credentials, wrong synthetic owner email, occupied ports, old Java, or stale Functions compilation can each prevent login. Check terminal output and Emulator UI. Keep the app tab focused for passkey prompts.
 
 Firebase references: [demo projects and Auth](https://firebase.google.com/docs/emulator-suite/connect_auth), [Firestore](https://firebase.google.com/docs/emulator-suite/connect_firestore), [Storage](https://firebase.google.com/docs/emulator-suite/connect_storage), [Functions environment precedence](https://firebase.google.com/docs/functions/config-env#emulator_support).
+
+
+## Test automatic locking
+
+The emulator uses the same server lifetime parameter as production: omitted `AUTH_SESSION_MINUTES` defaults to `60`; set it to `15`, `30`, or `60` in the local Functions environment to test different new sessions, then restart the emulator. Existing issued records keep their expiry. Invalid values reject authentication rather than producing unbounded sessions.
+
+Security → Automatic locking settings controls device-only background grace (default 30 seconds) and inactivity (default 5 minutes). Background concealment is immediate and mandatory. Try returning within grace, returning after grace, immediately locking, and changing to a shorter inactivity value after time has elapsed. Restore defaults resets those two preferences only. Reloads always discard authentication and encryption keys.
+
+`pnpm test` uses fake clocks for lifecycle/expiry, sleep-style clock jumps, trusted interaction wiring, invalid preferences, stale async races, and server issuance/authorization tests. `pnpm test:rules` includes an expired private record with fresh Firebase token claims. `pnpm test:local` covers signed synthetic WebAuthn enrollment/login and encrypted emulator roundtrips. Real device sleep, BFCache behavior, OS screenshots, platform passkeys, and mobile app switching still require device verification; DOM timing tests cannot prove them.
