@@ -40,7 +40,7 @@ Use Node 22 and npm 10 for the backend lockfile. Install with `npm --prefix func
 
 ## Emulator failures
 
-Use Java 21+, free ports 18080/19199, and run `pnpm test:rules` from the repository root. First use requires network access to download emulator binaries. Keep the project `demo-haven-vault`; never target a production database with tests.
+Use Node 22, Java 21+, free the configured emulator ports, and run `pnpm test:local` from the repository root. Use `pnpm dev:local` for the app with live emulators; see [local development](LOCAL_DEVELOPMENT.md). First use requires network access to download emulator binaries. Keep the project `demo-haven-vault`; never target a production database with tests.
 
 ## Wrong passphrase or damaged ciphertext
 

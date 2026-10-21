@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
   return {
     user, auth: { currentUser: null as null | typeof user },
     initializeAuth: vi.fn(),
+    connectAuth: vi.fn(), connectFirestore: vi.fn(), connectFunctions: vi.fn(), connectStorage: vi.fn(),
     signOut: vi.fn(),
     signIn: vi.fn(),
     authentication: vi.fn(),
@@ -22,14 +23,16 @@ vi.mock('firebase/auth', () => ({
   browserPopupRedirectResolver: {},
   inMemoryPersistence: { type: 'NONE' },
   initializeAuth: mocks.initializeAuth,
+  connectAuthEmulator: mocks.connectAuth,
   signInWithCustomToken: mocks.signIn,
   signOut: mocks.signOut,
   signInWithPopup: mocks.popup,
 }));
-vi.mock('firebase/firestore', () => ({ getFirestore: () => ({}) }));
-vi.mock('firebase/storage', () => ({ getStorage: () => ({}) }));
+vi.mock('firebase/firestore', () => ({ getFirestore: () => ({}), connectFirestoreEmulator: mocks.connectFirestore }));
+vi.mock('firebase/storage', () => ({ getStorage: () => ({}), connectStorageEmulator: mocks.connectStorage }));
 vi.mock('firebase/functions', () => ({
   getFunctions: () => ({}),
+  connectFunctionsEmulator: mocks.connectFunctions,
   httpsCallable: (_instance: unknown, name: string) => (data: unknown) => mocks.call(name, data),
 }));
 vi.mock('@simplewebauthn/browser', () => ({
@@ -186,5 +189,39 @@ describe('vault authentication lifecycle', () => {
     await session.signOutVault();
     expect(mocks.auth.currentUser).toBeNull();
     expect(() => session.getVaultUserId()).toThrow();
+  });
+});
+
+
+describe('emulator isolation', () => {
+  it('connects every service locally even with production browser configuration present', async () => {
+    vi.stubEnv('MODE', 'emulator');
+    vi.stubEnv('DEV', true);
+    vi.stubGlobal('window', { location: { hostname: 'localhost' } });
+    const session = await import('./firebase');
+    expect(session.isVaultBackendReady).toBe(true);
+    expect(mocks.connectAuth).toHaveBeenCalledWith(mocks.auth, 'http://127.0.0.1:9099');
+    expect(mocks.connectFirestore).toHaveBeenCalledWith(expect.anything(), '127.0.0.1', 18080);
+    expect(mocks.connectStorage).toHaveBeenCalledWith(expect.anything(), '127.0.0.1', 19199);
+    expect(mocks.connectFunctions).toHaveBeenCalledWith(expect.anything(), '127.0.0.1', 5001);
+    await session.signInWithPasskey();
+    expect(session.getVaultUserId()).toBe('owner');
+  });
+
+  it('leaves production services untouched in normal mode', async () => {
+    await import('./firebase');
+    for (const mock of [mocks.connectAuth, mocks.connectFirestore, mocks.connectStorage, mocks.connectFunctions]) expect(mock).not.toHaveBeenCalled();
+  });
+
+  it('refuses emulator mode on a deployed origin or in a production build', async () => {
+    vi.stubEnv('MODE', 'emulator');
+    vi.stubEnv('DEV', true);
+    vi.stubGlobal('window', { location: { hostname: 'example.web.app' } });
+    await expect(import('./firebase')).rejects.toThrow('local development');
+    vi.resetModules();
+    vi.stubEnv('DEV', false);
+    vi.stubGlobal('window', { location: { hostname: 'localhost' } });
+    await expect(import('./firebase')).rejects.toThrow('local development');
+    expect(mocks.initializeAuth).not.toHaveBeenCalled();
   });
 });

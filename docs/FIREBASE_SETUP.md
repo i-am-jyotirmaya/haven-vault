@@ -165,3 +165,40 @@ Later visits use **Unlock with passkey**, then the passphrase. The OS may synchr
 Keep independent originals. This version has no complete encrypted export/import tool. A manually designed backup must preserve vault configuration, encrypted metadata, encrypted Storage objects, and the identifiers used by encryption contexts. Copying files alone is insufficient. Test restores before relying on them.
 
 For upgrades, review changes, install from both lockfiles, run checks, and deploy changed components explicitly. Changes to encryption formats, context strings, salts, or hostnames need a migration plan. Never reset backend records as routine troubleshooting.
+
+
+## Local deployment commands
+
+After the project and three configuration files above are ready, deploy directly from your terminal:
+
+```sh
+pnpm firebase login
+pnpm deploy:plan
+pnpm deploy:cloud
+```
+
+`deploy:plan` validates local files and prints the exact project ID, canonical origin, scope, and planned stages. It makes no cloud requests or changes. `deploy:cloud` checks browser project/bucket/region/project number and Functions owner/RP/origin consistency, runs frontend/script/backend tests, builds Functions, deploys backend/rules, checks cloud access, verifies callable/data authorization, builds the production frontend, publishes Hosting, and verifies the published site. It always passes the configured project explicitly rather than relying on `firebase use` or a current alias. The frontend readiness flag is set for that build only, after backend smoke checks succeed; your environment file is preserved.
+
+The command expects `functions/.env.<projectId>`, not an alias-named Functions file. Vite production mode loads its normal `.env*` precedence, including `.env.production.local`, so update those files if preflight reports drift. Functions deployment loads `.env` and `.env.<projectId>`; emulator `.env.local` overrides are not deployed.
+
+For a first deployment or a permissions repair, review section 5 and then opt into the existing access helpers:
+
+```sh
+pnpm deploy:plan --configure-access
+pnpm deploy:cloud --configure-access
+```
+
+That option applies the documented IAM grants, callable invocation access, and replacement of the dedicated bucket's CORS list with the canonical origin. Without it, access helpers only check and fail on missing configuration. Deployment stops before publishing Hosting when access or backend smoke checks fail. There is no automatic rollback: a failure after backend deployment leaves those backend changes applied. Fix the reported stage and rerun.
+
+For a scoped update:
+
+```sh
+pnpm deploy:cloud --only backend
+pnpm deploy:cloud --only hosting
+pnpm deploy:plan --only hosting
+pnpm deploy:verify
+```
+
+Backend scope deploys Functions, Firestore rules/indexes, and Storage rules without publishing Hosting. Hosting scope validates the existing backend before publishing the newly built frontend. Both run the local unit/config/policy checks. Run `pnpm test:local` before releases for integration and rules checks; Java/emulator downloads are not required by the cloud deployment command itself.
+
+These commands reuse the locally installed, locked Firebase CLI and your own signed-in account. Cloud infrastructure provisioning (billing, databases, bucket, Google provider, domains) still follows section 2; deployment does not silently create accounts, choose billing, or change domains. No live deployment is needed for [local development](LOCAL_DEVELOPMENT.md).

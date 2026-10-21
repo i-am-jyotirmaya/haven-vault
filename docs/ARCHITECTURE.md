@@ -75,8 +75,8 @@ Sharing, multi-user tenancy, key recovery, passphrase changes, and account trans
 
 Use `pnpm dev` with `?demo=1` for local UI work. `pnpm test:rules` starts Firestore and Storage emulators with disposable fixtures.
 
-The frontend does not currently call `connectAuthEmulator`, `connectFunctionsEmulator`, `connectFirestoreEmulator`, or `connectStorageEmulator`. Starting emulators alone does not route browser SDK traffic to them. A configured frontend normally contacts its configured Firebase project.
+`pnpm dev:local` starts all four service emulators against fictional project `demo-haven-vault`, builds/watches Functions, and starts Vite at `http://localhost:5173`. The browser connects every SDK before issuing requests; local mode ignores production Firebase configuration and cannot be built for deployment. `pnpm test:local` exercises real handlers and rules in a fresh disposable stack. See [local development](LOCAL_DEVELOPMENT.md) for synthetic Google enrollment, passkeys, persistence, reset, and runtime prerequisites.
 
-Full local integration requires explicit development-only emulator connections after initialization, a disposable `demo-*` project, the exact local origin in backend configuration, and a test owner-bootstrap strategy that accurately models Google claims. Do not weaken production bootstrap checks to facilitate testing. `localhost` and `127.0.0.1` are distinct passkey identities.
+Production bootstrap and signature checks remain active in local integration. `localhost` and `127.0.0.1` are distinct passkey identities. Normal `pnpm dev` still contacts the configured Firebase project.
 
 Alternatively, deploy a separate staging Firebase project and hostname with its own passkeys, using non-sensitive fixtures. Production credentials will not work on the staging hostname.

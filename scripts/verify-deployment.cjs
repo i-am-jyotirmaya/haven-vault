@@ -27,14 +27,14 @@ async function callable(name) {
 
 (async () => {
   await Promise.all([
-    run('Hosting and security headers', async () => {
+    ...(!process.argv.includes('--backend') ? [run('Hosting and security headers', async () => {
       const response = await fetch(origin, { signal: AbortSignal.timeout(30000) });
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
       assert.match(response.headers.get('cache-control') || '', /no-store/);
       assert.equal(response.headers.get('x-frame-options'), 'DENY');
       assert.match(await response.text(), /Haven/);
-    }),
+    })] : []),
     run('Unauthenticated Firestore reads denied', async () => {
       const response = await fetch(`https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/users/deployment-probe/vault/config`, { signal: AbortSignal.timeout(30000) });
       assert.equal(response.status, 403);

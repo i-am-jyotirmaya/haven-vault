@@ -24,3 +24,5 @@ storage-cors.json
 .agents/
 .codex/
 .publish/
+
+.emulator-data/

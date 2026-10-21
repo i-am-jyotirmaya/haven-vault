@@ -11,8 +11,14 @@
     "test:backend": "npm --prefix functions test",
     "test:rules": "node functions/node_modules/firebase-tools/lib/bin/firebase.js emulators:exec --project demo-haven-vault --only firestore,storage \"node --test functions/test/rules.test.mjs\"",
     "check": "tsc -b",
-    "test:config": "node --test scripts/config.test.cjs",
-    "firebase": "node functions/node_modules/firebase-tools/lib/bin/firebase.js"
+    "test:config": "node --test scripts/*.test.cjs",
+    "firebase": "node functions/node_modules/firebase-tools/lib/bin/firebase.js",
+    "setup:local": "node scripts/local.cjs setup",
+    "dev:local": "node scripts/local.cjs start",
+    "test:local": "node scripts/local.cjs test",
+    "deploy:plan": "node scripts/deploy.cjs --plan",
+    "deploy:verify": "node scripts/verify-deployment.cjs",
+    "deploy:cloud": "node scripts/deploy.cjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.2.2",
