@@ -4,5 +4,11 @@ import App from './App';
 import './styles.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><App /></React.StrictMode>,
+  <React.StrictMode>
+    <div id="sensitive-surface"><App /></div>
+    <div className="privacy-screen" role="status" aria-live="polite">
+      <strong>Haven is concealed</strong>
+      <span>Checking your secure session before showing content.</span>
+    </div>
+  </React.StrictMode>,
 );

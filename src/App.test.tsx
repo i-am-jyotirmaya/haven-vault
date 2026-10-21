@@ -15,6 +15,7 @@ vi.mock('./lib/firebase', () => ({
   signInWithPasskey: mocks.signIn, enrollPasskey: mocks.enroll, signOutVault: mocks.signOut,
   validateVaultSession: mocks.validate,
   getVaultSessionDeadline: () => mocks.deadline,
+  getVaultSessionLifetimeMinutes: () => 15,
   getVaultUserId: () => {
     if (!mocks.authenticated || Date.now() >= mocks.deadline) throw Object.assign(new Error('Session ended'), { code: 'unauthenticated' });
     return 'owner';
@@ -56,6 +57,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(10_000);
   vi.clearAllMocks();
+  localStorage.clear();
   mocks.authenticated = false;
   mocks.deadline = Date.now() + 885_000;
   mocks.signIn.mockImplementation(async () => { mocks.authenticated = true; });
@@ -97,12 +99,12 @@ describe('authentication and local encryption transitions', () => {
     await openVault();
     if (trigger === 'manual') fireEvent.click(screen.getByRole('button', { name: 'Lock vault' }));
     if (trigger === 'inactivity') act(() => vi.advanceTimersByTime(300_000));
-    if (trigger === 'visibility') hide();
+    if (trigger === 'visibility') { hide(); act(() => vi.advanceTimersByTime(30_000)); show(); await flush(); }
     expect(screen.getByLabelText('Your passphrase')).toHaveProperty('value', '');
     expect(screen.queryByText(file.name)).toBeNull();
     expect(mocks.signOut).not.toHaveBeenCalled();
     expect(mocks.authenticated).toBe(true);
-    if (trigger === 'visibility') { show(); await flush(); }
+
     await unlock();
     expect(screen.getByRole('button', { name: 'Lock vault' })).toBeTruthy();
     expect(mocks.signIn).toHaveBeenCalledOnce();
@@ -120,10 +122,10 @@ describe('authentication and local encryption transitions', () => {
     expect(mocks.signIn).toHaveBeenCalledOnce();
   });
 
-  it('inactivity also clears a passphrase draft on the authenticated lock screen', async () => {
+  it('backgrounding clears a passphrase draft on the authenticated lock screen', async () => {
     render(<App />); await authenticate();
     fireEvent.change(screen.getByLabelText('Your passphrase'), { target: { value: secret } });
-    act(() => vi.advanceTimersByTime(300_000));
+    hide(); show(); await flush();
     expect(screen.getByLabelText('Your passphrase')).toHaveProperty('value', '');
     expect(mocks.authenticated).toBe(true);
     expect(mocks.signOut).not.toHaveBeenCalled();
@@ -202,8 +204,10 @@ describe('authentication and local encryption transitions', () => {
     hide();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:private');
     expect(screen.queryByRole('dialog')).toBeNull();
-    await unlock(); // Hidden documents cannot finish unlocking.
-    expect(screen.queryByRole('button', { name: 'Lock vault' })).toBeNull();
+    expect(document.documentElement.dataset.havenConcealed).toBe('true');
+    act(() => vi.advanceTimersByTime(30_000));
+    show(); await flush();
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
   });
 
   it('a pending preview cannot create an object URL after locking', async () => {
@@ -239,7 +243,7 @@ describe('authentication and local encryption transitions', () => {
     let finish!: (item: unknown) => void;
     mocks.saveNote.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
     fireEvent.submit(screen.getByLabelText('Title').closest('form')!);
-    await flush(); hide();
+    await flush(); hide(); act(() => vi.advanceTimersByTime(30_000)); show(); await flush();
     await act(async () => finish({ ...file, name: 'Late private note' }));
     expect(screen.queryByText('Late private note')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
