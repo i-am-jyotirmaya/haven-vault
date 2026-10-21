@@ -1,0 +1,7 @@
+{
+  "projectId": "your-project-id",
+  "projectNumber": "123456789012",
+  "bucket": "your-project-id.firebasestorage.app",
+  "origin": "https://your-project-id.web.app",
+  "region": "us-central1"
+}

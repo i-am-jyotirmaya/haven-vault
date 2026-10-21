@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function liveSession(uid) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && request.auth.token.keys().hasAll(['vaultAccess', 'vaultSession'])
+        && request.auth.token.vaultAccess == true
+        && request.auth.token.vaultSession is string
+        && request.auth.token.vaultSession.matches('^[A-Za-z0-9_-]{43}$')
+        && sessionValid(uid, request.auth.token.vaultSession);
+    }
+    function sessionValid(uid, sessionId) {
+      let session = get(/databases/$(database)/documents/_vaultSessions/$(sessionId)).data;
+      return session.uid == uid && session.revoked == false && session.expiresAt > request.time;
+    }
+    function encrypted(payload) {
+      return payload is map
+        && payload.keys().hasOnly(['version', 'iv', 'ciphertext'])
+        && payload.keys().hasAll(['version', 'iv', 'ciphertext'])
+        && payload.version == 1
+        && payload.iv is string && payload.iv.size() == 16
+        && payload.iv.matches('^[A-Za-z0-9+/]{16}$')
+        && payload.ciphertext is string
+        && payload.ciphertext.size() >= 24
+        && payload.ciphertext.size() <= 700000
+        && payload.ciphertext.matches('^[A-Za-z0-9+/]+={0,2}$');
+    }
+    function validConfig(data) {
+      return data.keys().hasOnly(['version', 'salt', 'iterations', 'verifier'])
+        && data.keys().hasAll(['version', 'salt', 'iterations', 'verifier'])
+        && data.version == 1
+        && data.salt is string && data.salt.size() == 44
+        && data.salt.matches('^[A-Za-z0-9+/]{43}=$')
+        && data.iterations is int && data.iterations >= 600000 && data.iterations <= 2000000
+        && encrypted(data.verifier) && data.verifier.ciphertext.size() <= 512;
+    }
+    match /users/{uid}/vault/config {
+      allow get: if liveSession(uid);
+      allow create: if liveSession(uid) && validConfig(request.resource.data);
+      // Changing this without re-encrypting every object would lose the vault.
+      allow update, delete, list: if false;
+    }
+    match /users/{uid}/items/{itemId} {
+      allow read, delete: if liveSession(uid);
+      allow create, update: if liveSession(uid)
+        && itemId.matches('^[A-Za-z0-9_-]{1,128}$')
+        && request.resource.data.keys().hasOnly(['payload'])
+        && request.resource.data.keys().hasAll(['payload'])
+        && encrypted(request.resource.data.payload);
+    }
+    // Challenge, credential, owner, session and rate-limit records are Admin SDK only.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
