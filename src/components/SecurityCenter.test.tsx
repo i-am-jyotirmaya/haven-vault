@@ -82,7 +82,7 @@ it('does not claim cancellation preserved old settings after an unconfirmed reco
   mocks.get.mockRejectedValue(new Error('offline while checking saved record'))
   fireEvent.click(screen.getByRole('button', { name: 'Confirm saved kit and commit' }))
   await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('may already have succeeded'))
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.getByText(/last save outcome is unknown/)).toBeTruthy()
   expect(screen.queryByText(/previous recovery settings are unchanged/)).toBeNull()
 })

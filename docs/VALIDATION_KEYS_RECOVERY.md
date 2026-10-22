@@ -119,3 +119,7 @@ an interrupted recovery acknowledgement that must not later be described as an
 unchanged cancellation. Recovery kit IDs are visible in Security so the saved
 file can be compared after an unconfirmed save. Backend policy/configuration
 checks, TypeScript and the production build pass. No deployment was performed.
+
+Authenticated recovery drafts also follow the configured grace while concealed;
+ordinary unlock drafts still clear immediately. A regression test checks return
+within grace and cleanup at the original deadline without signing out.

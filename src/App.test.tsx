@@ -599,3 +599,17 @@ it('native credential UI does not suspend inactivity or authentication expiry', 
   await act(async () => { finish(); await pending; clearCredentialPrompts() })
   expect(screen.queryByText(file.name)).toBeNull()
 })
+
+it('retains authenticated recovery drafts only within the configured grace and clears them on lock', async () => {
+  render(<App />); await authenticate()
+  const details = screen.getByText('Recover vault access or a forgotten passphrase').closest('details')!
+  details.open = true; fireEvent(details, new Event('toggle'))
+  fireEvent.change(screen.getByLabelText('Recovery kit file contents'), { target: { value: 'fictional recovery material' } })
+  hide()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', 'fictional recovery material')
+  act(() => vi.advanceTimersByTime(29000)); show(); await flush()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', 'fictional recovery material')
+  hide(); act(() => vi.advanceTimersByTime(30000)); show(); await flush()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
+  expect(mocks.signOut).not.toHaveBeenCalled()
+})

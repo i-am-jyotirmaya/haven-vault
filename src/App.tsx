@@ -270,8 +270,9 @@ export default function App() {
     conceal: (background) => {
       clearPlaintext();
       setPreviewId(null);
-      // Cancel local passphrase derivation/drafts without cancelling WebAuthn.
-      if (background && stateRef.current.status === "locked") clearSensitiveState();
+      // Cancel ordinary unlock drafts immediately. An open recovery workflow
+      // follows the configured grace/idle policy, including native UI hiding.
+      if (background && stateRef.current.status === "locked" && !recoveryActive) clearSensitiveState();
     },
     validate: async () => {
       if (stateRef.current.status !== "locked" && stateRef.current.status !== "unlocked") return;
