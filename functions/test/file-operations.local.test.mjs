@@ -101,7 +101,7 @@ test('dependable encrypted file operations and faults', { timeout: 240000 }, asy
       const f = await fixture(); await begin(f); await upload(f);
       await assert.rejects(injected('cancel', { id: f.id }, { failDelete: true }), /Injected object/);
       assert.equal((await opRef(f.id).get()).data().status, 'cancelling');
-      assert.equal((await bucket.file(objectPath(f.id)).exists())[0], true);
+      assert.ok((await call('list')).operations.some(o => o.id === f.id), 'cleanup is still visible until the receipt is reconciled');
       const result = await call('finalize', { id: f.id }); assert.equal(result.operation.status, 'cancelled');
       assert.equal((await bucket.file(objectPath(f.id)).exists())[0], false);
       await assert.rejects(upload(f), { code: 'storage/unauthorized' });
