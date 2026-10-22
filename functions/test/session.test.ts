@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('firebase-admin/app', () => ({ initializeApp: vi.fn() }));
 vi.mock('firebase-admin/auth', () => ({ getAuth: vi.fn() }));
 vi.mock('firebase-admin/firestore', () => ({
-  Timestamp: { now: vi.fn(), fromMillis: vi.fn() },
+  Timestamp: { now: () => ({ toMillis: () => Date.now() }), fromMillis: vi.fn() },
   getFirestore: () => ({
     doc: (path: string) => path,
     collection: (path: string) => ({ doc: (id: string) => `${path}/${id}` }),
@@ -36,19 +36,19 @@ beforeEach(() => {
   mocks.records.clear();
   mocks.records.set('_vaultAuth/owner', { uid: 'owner' });
   mocks.records.set(`_vaultSessions/${id}`, { uid: 'owner', revoked: false, sessionDurationMinutes: 15, expiresAt: { toMillis: () => Date.now() + 900_000 } });
-  mocks.get.mockImplementation(async (path: string) => ({ data: () => mocks.records.get(path) }));
+  mocks.get.mockImplementation(async (path: string) => ({ ref: path, data: () => mocks.records.get(path) }));
 });
 
 afterEach(() => vi.useRealTimers());
 
 describe('authoritative vault session validation callable', () => {
-  it('returns only enforced expiry and server time, without writes or renewal', async () => {
+  it('tracks validation activity without renewing expiry', async () => {
     const result = await validate(request);
     expect(Object.keys(result).sort()).toEqual(['expiresAtMs', 'serverNowMs', 'sessionDurationMinutes']);
     expect(result.expiresAtMs - result.serverNowMs).toBeGreaterThanOrEqual(899_990);
     expect(mocks.get).toHaveBeenCalledWith('_vaultAuth/owner');
     expect(mocks.get).toHaveBeenCalledWith(`_vaultSessions/${id}`);
-    expect(mocks.write).not.toHaveBeenCalled();
+    expect(mocks.write).toHaveBeenCalledWith(`_vaultSessions/${id}`, { lastActivityAt: expect.anything() });
   });
   it.each([
     undefined,

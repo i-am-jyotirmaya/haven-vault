@@ -130,3 +130,8 @@ are neither an audit nor a recommendation for irreplaceable primary storage.
 - https://simplewebauthn.dev/docs/13.3.x/packages/server (pinned major 13 ceremonies)
 - https://firebase.google.com/docs/firestore/manage-data/transactions (atomic CAS)
 - https://nodejs.org/docs/latest-v22.x/api/crypto.html (P-256 IEEE-P1363 verification)
+
+Storage rules use a private `_vaultAccess/{uid}` generation authority, transactionally
+updated with config/migration state, alongside the private session. This keeps
+requests within Storage's two-Firestore-document access limit. See
+https://firebase.google.com/docs/storage/security/rules-conditions#enhance_with_cloud_firestore.

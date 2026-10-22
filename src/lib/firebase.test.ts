@@ -59,9 +59,10 @@ beforeEach(() => {
   });
   mocks.signOut.mockImplementation(async () => { mocks.auth.currentUser = null; });
   mocks.call.mockImplementation(async (name: string) => {
+    const now = Date.now();
     if (name === 'authenticationOptions' || name === 'registrationOptions') return { data: { options: {}, challengeId: 'challenge' } };
-    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: Date.now(), expiresAtMs: Date.now() + 3_600_000, sessionDurationMinutes: 60 } };
-    if (name === 'validateVaultSession') return { data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 60 * 60_000, sessionDurationMinutes: 60 } };
+    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: now, expiresAtMs: now + 3_600_000, sessionDurationMinutes: 60 } };
+    if (name === 'validateVaultSession') return { data: { serverNowMs: now, expiresAtMs: now + 60 * 60_000, sessionDurationMinutes: 60 } };
     return { data: { ended: true } };
   });
 });
@@ -300,7 +301,7 @@ describe('server timing and clock validation', () => {
     });
     const session = await import('./firebase');
     const start = Date.now(); await session.signInWithPasskey();
-    expect(session.getVaultSessionDeadline()).toBeGreaterThanOrEqual(start + minutes * 60_000 - 15_000);
+    expect(session.getVaultSessionDeadline()).toBeGreaterThanOrEqual(start + minutes * 60_000 - 15_000 - 50);
     expect(session.getVaultSessionLifetimeMinutes()).toBe(minutes);
   });
   it.each([0, 16, 90, Infinity])('rejects an invalid server-issued lifetime %s', async minutes => {

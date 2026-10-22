@@ -1114,6 +1114,7 @@ export default function App() {
           </div>
         </header>
         <main className="main-content">
+          {!demo && vaultState.status === 'unlocked' && vaultState.config.version === 2 && !vaultState.config.recovery && <div className="setup-notice" role="status"><span><strong>Recovery setup incomplete.</strong> Save and confirm a recovery kit in Security. Without a usable passphrase or recovery kit, content recovery is impossible.</span><button className="button secondary" onClick={() => openSection('Security')}>Set up recovery</button></div>}
           {section === "Security" ? (
             <>
               <div className="page-heading">

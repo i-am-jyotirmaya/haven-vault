@@ -3,7 +3,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const project = 'demo-haven-vault';
-const localEnv = 'OWNER_EMAIL=owner@example.com\nRP_ID=localhost\nEXPECTED_ORIGIN=http://localhost:5173\nENFORCE_APP_CHECK=false\n';
+const localEnv = 'OWNER_EMAIL=owner@example.com\nRP_ID=localhost\nEXPECTED_ORIGIN=http://localhost:5173\nENFORCE_APP_CHECK=false\nAUTH_SESSION_MINUTES=60\n';
 
 function run(args) {
   // Keep this wrapper alive while Firebase handles Ctrl+C and exports data.
@@ -53,7 +53,7 @@ if (require.main === module) {
         args[1] = 'emulators:start';
         if (fs.existsSync(path.join(root, '.emulator-data/firebase-export-metadata.json'))) args.push('--import', '.emulator-data');
         args.push('--export-on-exit', '.emulator-data');
-      } else args.push('node --test --test-concurrency=1 functions/test/local.test.mjs functions/test/rules.test.mjs');
+      } else args.push('node --test --test-concurrency=1 functions/test/local.test.mjs functions/test/rules.test.mjs functions/test/security.local.test.mjs');
       run(action === 'start' ? ['scripts/local-dev.cjs', ...args] : args);
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }

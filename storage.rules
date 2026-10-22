@@ -14,19 +14,22 @@ service firebase.storage {
       let session = firestore.get(/databases/(default)/documents/_vaultSessions/$(sessionId)).data;
       return session.uid == uid && session.revoked == false && session.expiresAt > request.time;
     }
+    // Exactly two Firestore documents per request: the session and this Admin-only
+    // generation authority. Storage cannot read a third document in one evaluation.
     function legacyWrites(uid) {
-      return !firestore.exists(/databases/(default)/documents/users/$(uid)/vault/migration)
-        && (!firestore.exists(/databases/(default)/documents/users/$(uid)/vault/config)
-          || firestore.get(/databases/(default)/documents/users/$(uid)/vault/config).data.version == 1);
+      return !firestore.exists(/databases/(default)/documents/_vaultAccess/$(uid));
     }
     function activeGeneration(uid, generation) {
-      let config = firestore.get(/databases/(default)/documents/users/$(uid)/vault/config).data;
-      return config.version == 2 && config.generation == generation;
+      return firestore.get(/databases/(default)/documents/_vaultAccess/$(uid)).data.generation == generation;
+    }
+    function readableGeneration(uid, generation) {
+      let authority = firestore.get(/databases/(default)/documents/_vaultAccess/$(uid)).data;
+      return authority.generation == generation || authority.migrationGeneration == generation;
     }
     function staging(uid, generation) {
-      let migration = firestore.get(/databases/(default)/documents/users/$(uid)/vault/migration).data;
-      return migration.phase == 'staging' && migration.record.generation == generation
-        && migration.sessionId == request.auth.token.vaultSession;
+      let authority = firestore.get(/databases/(default)/documents/_vaultAccess/$(uid)).data;
+      return authority.migrationPhase == 'staging' && authority.migrationGeneration == generation
+        && authority.migrationSessionId == request.auth.token.vaultSession;
     }
     match /vaults/{uid}/{itemId} {
       allow get: if liveSession(uid);
@@ -40,8 +43,7 @@ service firebase.storage {
       allow update, list: if false;
     }
     match /generations/{uid}/{generation}/{itemId} {
-      allow get: if liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation)
-        || firestore.get(/databases/(default)/documents/users/$(uid)/vault/migration).data.record.generation == generation);
+      allow get: if liveSession(uid) && readableGeneration(uid, generation);
       allow create: if resource == null && liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation))
         && itemId.matches('^[a-f0-9-]{36}$') && request.resource.size >= 29
         && request.resource.size <= 50 * 1024 * 1024 + 29

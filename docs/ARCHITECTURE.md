@@ -1,3 +1,7 @@
+> V2 key, migration and access design: [KEYS_RECOVERY_DESIGN.md](KEYS_RECOVERY_DESIGN.md).
+> Operational recovery, upgrade and rollback: [RECOVERY_UPGRADE.md](RECOVERY_UPGRADE.md).
+> The sections below describing v1 encryption remain the legacy compatibility specification.
+
 # Architecture and integration
 
 Haven is a complete single-owner application, not a multi-tenant vault SDK. The browser, Functions, and security rules must be integrated together.
@@ -79,7 +83,7 @@ Use the Firebase callable SDK/protocol. None of these functions receives a vault
 
 **Upgrade order:** deploy Functions (including `validateVaultSession` and verification/validation timing and lifetime metadata) before Hosting. Update invocation access with the supplied helper if needed. No ciphertext, rules, or stored vault data migration is required.
 
-The backend supports up to five credentials, but the UI does not expose adding/removing passkeys. This is not a completed recovery workflow.
+The Security screen manages up to five credentials with private labels and server-enforced recent authentication. Recovery has a separate kit-possession plus Google-owner enrollment path; see the v2 design above.
 
 ## Encryption and data model
 
@@ -108,7 +112,7 @@ The application limits files to 50 MiB even though the crypto primitive can acce
 5. Keep previews restricted. Do not render decrypted HTML/SVG as trusted markup or send documents to remote preview services.
 6. Run authorization tests and device-level sign-in/upload/download checks.
 
-Sharing, multi-user tenancy, key recovery, passphrase changes, and account transfers require a new security design. The singleton `_vaultAuth/owner` record is intentional.
+Sharing, multi-user tenancy and account transfers remain out of scope. The linked v2 design covers key recovery and passphrase changes. The singleton `_vaultAuth/owner` record is intentional.
 
 ## Local development and emulators
 

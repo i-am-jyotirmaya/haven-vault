@@ -1,6 +1,6 @@
 import { createHash, randomBytes, createPublicKey, verify as verifySignature } from "node:crypto";
 import { getStorage } from "firebase-admin/storage";
-import { freshPasskey, canonical, validKeyRecord, keyTransition } from "./security-policy.js";
+import { freshPasskey, canonical, validBox, validKeyRecord, keyTransition } from "./security-policy.js";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, Timestamp, type Transaction } from "firebase-admin/firestore";
@@ -261,7 +261,7 @@ async function issueSession(uid: string, credentialId: string, device = "Browser
   }
 }
 
-/** Read-only check of the same owner/session policy enforced by data rules. */
+/** Checks the data-rule authority and records activity without renewing expiry. */
 export const validateVaultSession = onCall(callableOptions, async (request) => {
   checkApp(request);
   const user = principal(request);
@@ -603,6 +603,7 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
       validPublicRecovery(request.data.record);
       if (current || request.data.record.revision !== 1 || request.data.record.recovery !== null) throw new HttpsError('already-exists', 'Vault already exists or setup record is invalid.');
       transaction.create(configRef, request.data.record);
+      transaction.set(db.doc(`_vaultAccess/${auth.uid}`), { generation: request.data.record.generation, migrationGeneration: null, migrationPhase: null, migrationSessionId: null });
       return { config: request.data.record };
     }
     if (action === 'replaceKeys') {
@@ -652,6 +653,7 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
         if (migration.phase === 'complete') return { migration, config: current };
         // An explicit, freshly verified owner claim invalidates the previous client.
         transaction.update(migrationRef, { sessionId: auth.id });
+        transaction.set(db.doc(`_vaultAccess/${auth.uid}`), { generation: null, migrationGeneration: migration.record.generation, migrationPhase: migration.phase, migrationSessionId: auth.id });
         return { migration: { ...migration, sessionId: auth.id }, config: current };
       }
       const next = request.data.record;
@@ -659,12 +661,19 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
       if (current?.version !== 1 || next.revision !== 1 || next.recovery !== null) throw new HttpsError('failed-precondition', 'Only unlocked legacy vaults can migrate.');
       const value = { version: 2, phase: 'staging', sessionId: auth.id, record: next, originalConfig: current, cursor: '', verified: 0, createdAt: Timestamp.now() };
       transaction.create(migrationRef, value);
+      transaction.set(db.doc(`_vaultAccess/${auth.uid}`), { generation: null, migrationGeneration: next.generation, migrationPhase: 'staging', migrationSessionId: auth.id });
       return { migration: value, config: current };
     }
     throw new HttpsError('invalid-argument', 'Unknown security operation.');
   });
 });
-function validBoxLabel(b: any) { return b?.version === 2 && typeof b.iv === 'string' && b.iv.length === 16 && typeof b.ciphertext === 'string' && b.ciphertext.length <= 2048 && Object.keys(b).length === 3; }
+function validBoxLabel(b: any) { return validBox(b) && b.ciphertext.length <= 2048; }
+
+async function ciphertextHash(file: { createReadStream(): AsyncIterable<Buffer> }): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of file.createReadStream()) hash.update(chunk);
+  return hash.digest('base64');
+}
 
 async function migrationOperation(request: CallableRequest) {
   const action = request.data.action;
@@ -698,15 +707,18 @@ async function migrationOperation(request: CallableRequest) {
       if (!exists) await file.copy(backup, { preconditionOpts: { ifGenerationMatch: 0 } });
       const [saved] = await backup.getMetadata();
       const [newFile] = await getStorage().bucket().file(`generations/${uid}/${generation}/${id}`).getMetadata();
-      if (metadata.md5Hash !== saved.md5Hash || metadata.size !== saved.size) throw new Error('Snapshot mismatch');
-      fileInfo = { original: metadata.generation, backup: saved.generation, staged: newFile.generation, originalHash: saved.md5Hash, stagedHash: newFile.md5Hash };
+      const sourceHash = await ciphertextHash(file);
+      const backupHash = await ciphertextHash(backup);
+      const stagedHash = await ciphertextHash(getStorage().bucket().file(`generations/${uid}/${generation}/${id}`));
+      if (sourceHash !== backupHash || metadata.size !== saved.size) throw new Error('Snapshot mismatch');
+      fileInfo = { original: metadata.generation, backup: saved.generation, staged: newFile.generation, originalHash: backupHash, stagedHash };
     } catch (error: any) { if (error.code !== 404 || request.data.hasFile !== false) throw new HttpsError('failed-precondition', 'Encrypted file safeguard could not be verified. Retry without removing originals.'); }
     if ((fileInfo !== null) !== (request.data.hasFile === true)) throw new HttpsError('failed-precondition', 'File manifest does not match ciphertext.');
     return db.runTransaction(async t => {
       const auth = await requireRecent(t, request, false);
       const latest = (await t.get(migrationRef)).data();
       const oldNow = await t.get(original.ref); const newNow = await t.get(staged.ref);
-      if (latest?.phase !== 'staging' || latest.sessionId !== auth.id || JSON.stringify(oldNow.data()) !== JSON.stringify(original.data()) || JSON.stringify(newNow.data()) !== JSON.stringify(staged.data())) throw new HttpsError('aborted', 'Migration state changed.');
+      if (latest?.phase !== 'staging' || latest.sessionId !== auth.id || canonical(oldNow.data()) !== canonical(original.data()) || canonical(newNow.data()) !== canonical(staged.data())) throw new HttpsError('aborted', 'Migration state changed.');
       t.set(receipts.doc(id), { source: original.data(), staged: staged.data(), fileInfo, clientVerified: true });
       return { saved: true };
     });
@@ -716,7 +728,10 @@ async function migrationOperation(request: CallableRequest) {
     const auth = await requireRecent(t, request, false);
     const latest = (await t.get(migrationRef)).data();
     if (latest?.sessionId !== auth.id) throw new HttpsError('aborted', 'Migration claim changed.');
-    if (latest.phase === 'staging') t.update(migrationRef, { phase: 'verifying' });
+    if (latest.phase === 'staging') {
+      t.update(migrationRef, { phase: 'verifying' });
+      t.update(db.doc(`_vaultAccess/${uid}`), { migrationPhase: 'verifying' });
+    }
   });
   return db.runTransaction(async t => {
     const auth = await requireRecent(t, request, false);
@@ -725,13 +740,14 @@ async function migrationOperation(request: CallableRequest) {
     if (latest.sessionId !== auth.id) throw new HttpsError('aborted', 'Migration claim changed.');
     if (latest.phase === 'complete') return { complete: true, config: current };
     if (current?.version !== 1) throw new HttpsError('aborted', 'Source generation changed.');
-    const query = source.orderBy('__name__').startAfter(latest.cursor || '').limit(40);
+    const ordered = source.orderBy('__name__');
+    const query = (latest.cursor ? ordered.startAfter(latest.cursor) : ordered).limit(10);
     const entries = await t.get(query);
     const targets = await Promise.all(entries.docs.map(d => t.get(target.doc(d.id))));
     const saved = await Promise.all(entries.docs.map(d => t.get(receipts.doc(d.id))));
     entries.docs.forEach((d, i) => {
       const receipt = saved[i].data();
-      if (!receipt?.clientVerified || JSON.stringify(receipt.source) !== JSON.stringify(d.data()) || JSON.stringify(receipt.staged) !== JSON.stringify(targets[i].data())) throw new HttpsError('failed-precondition', 'Migration verification is incomplete. Originals remain intact.');
+      if (!receipt?.clientVerified || canonical(receipt.source) !== canonical(d.data()) || canonical(receipt.staged) !== canonical(targets[i].data())) throw new HttpsError('failed-precondition', 'Migration verification is incomplete. Originals remain intact.');
     });
     if (entries.empty) {
       // Source and staged document counts must agree; no injected extra records.
@@ -740,6 +756,7 @@ async function migrationOperation(request: CallableRequest) {
       if (allSource.size !== allTarget.size || allSource.size !== latest.verified) throw new HttpsError('failed-precondition', 'Migration manifest mismatch.');
       t.set(configFor(uid), latest.record);
       t.update(migrationRef, { phase: 'complete', completedAt: Timestamp.now() });
+      t.update(db.doc(`_vaultAccess/${uid}`), { generation: latest.record.generation, migrationPhase: 'complete' });
       return { complete: true, config: latest.record };
     }
     t.update(migrationRef, { cursor: entries.docs.at(-1)!.id, verified: latest.verified + entries.size });
