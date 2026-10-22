@@ -45,3 +45,22 @@ Use Node 22, Java 21+, free the configured emulator ports, and run `pnpm test:lo
 ## Wrong passphrase or damaged ciphertext
 
 The app cannot distinguish every incorrect passphrase from corrupted authenticated ciphertext. Check your saved passphrase and keyboard layout. Replacing the salt/configuration does not decrypt existing data. There is no reset API. Restore only through a tested complete backup procedure preserving IDs and encryption contexts.
+
+## File queues, collections and partial deletion
+
+Use **Reload latest / retry reconciliation** after reconnecting or reauthenticating.
+A lost response can mean the operation already committed. Successful files are
+not reuploaded. A missing original requires cancelling its receipt and selecting
+it again: Haven does not persist plaintext or resumable File handles. The queue
+keeps at most one encrypted retry buffer; other failed transfers can still
+retry finalization from their receipts.
+
+Never remove a visible failed deletion's metadata manually. Retry cleanup from
+Trash; object deletion happens before metadata deletion, with a durable marker
+blocking conflicting edits. Trash remains until explicit deletion and includes
+storage usage. Downloaded copies, exported backups and retained migration
+safeguards are independent copies.
+
+See [FILE_OPERATIONS.md](FILE_OPERATIONS.md) for state definitions, conflict and
+collection-migration rules, quota/offline guidance and measurement limitations,
+and [VALIDATION_FILE_OPERATIONS.md](VALIDATION_FILE_OPERATIONS.md) for checks.

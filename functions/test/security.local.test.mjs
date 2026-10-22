@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initializeApp as adminApp } from 'firebase-admin/app';
+import { getStorage as adminStorage } from 'firebase-admin/storage';
 import { getFirestore as adminFirestore, Timestamp } from 'firebase-admin/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { initializeAuth, inMemoryPersistence, connectAuthEmulator, GoogleAuthProvider, signInWithCredential, signInWithCustomToken, signOut } from 'firebase/auth';
@@ -12,7 +13,8 @@ import { authenticator } from './webauthn-fixture.mjs';
 import { createKeyRecord, unlockKeyRecord, changePassphrase, prepareRecovery, prepareRecoveredRecord, unlockRecovery, signRecovery, hashJson } from '../../src/lib/keys.ts';
 for (const [name, expected] of Object.entries({ FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIRESTORE_EMULATOR_HOST: '127.0.0.1:18080', FIREBASE_STORAGE_EMULATOR_HOST: '127.0.0.1:19199', GCLOUD_PROJECT: 'demo-haven-vault' })) assert.equal(process.env[name], expected, 'Never run this against a real vault');
 const projectId = 'demo-haven-vault';
-const admin = adminFirestore(adminApp({ projectId, storageBucket: `${projectId}.appspot.com` }, 'security-fixtures'));
+const adminApplication = adminApp({ projectId, storageBucket: `${projectId}.appspot.com` }, 'security-fixtures');
+const admin = adminFirestore(adminApplication);
 function client(name) {
   const app = initializeApp({ projectId, apiKey: 'fake-api-key', storageBucket: `${projectId}.appspot.com` }, name);
   const auth = initializeAuth(app, { persistence: inMemoryPersistence }), db = getFirestore(app), storage = getStorage(app), functions = getFunctions(app, 'us-central1');
@@ -139,11 +141,13 @@ test('security product workflows against isolated emulators', { timeout: 240000 
       await uidRef.set(legacy); await admin.doc(`_vaultAccess/${uid}`).delete(); await login(fresh, recoveredKey); await login(first, recoveredKey);
       const id = '33333333-3333-4333-8333-333333333333';
       const source = doc(fresh.db, `users/${uid}/items/${id}`);
-      await setDoc(source, { payload: legacy.verifier });
+      await admin.doc(`users/${uid}/items/${id}`).set({ payload: legacy.verifier });
       const originalFile = ref(fresh.storage, `vaults/${uid}/${id}`), bytes = Buffer.alloc(64, 7);
-      await uploadBytes(originalFile, bytes, { contentType: 'application/octet-stream' });
+      await adminStorage(adminApplication).bucket().file(`vaults/${uid}/${id}`).save(bytes, { contentType: 'application/octet-stream' });
       const { config: staged } = await createKeyRecord(phrase);
       await operation(fresh, 'migrationBegin', { record: staged });
+      assert.equal((await operation(fresh, 'files.list', { generation: 'legacy' })).migrationPending, true);
+      await assert.rejects(operation(fresh, 'files.catalog', { generation: 'legacy', payload: legacy.verifier, expectedRevision: 0, expectedEpoch: 0 }), { code: 'functions/failed-precondition' });
       await assert.rejects(setDoc(source, { payload: legacy.verifier }), { code: 'permission-denied' });
       await assert.rejects(deleteObject(originalFile), { code: 'storage/unauthorized' });
       const path = `users/${uid}/generations/${staged.generation}/items/${id}`, object = `generations/${uid}/${staged.generation}/${id}`;

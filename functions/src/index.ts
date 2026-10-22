@@ -1,4 +1,5 @@
-import { fileOperation } from './file-operations.js';
+import { onObjectFinalized } from 'firebase-functions/v2/storage';
+import { fileOperation, validMetadata, cleanupStagedObject } from './file-operations.js';
 import { createHash, randomBytes, createPublicKey, verify as verifySignature } from "node:crypto";
 import { getStorage } from "firebase-admin/storage";
 import { freshPasskey, canonical, validBox, validKeyRecord, keyTransition } from "./security-policy.js";
@@ -582,11 +583,11 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
   configured(request);
   const action = request.data?.action;
   if (typeof action !== 'string') throw new HttpsError('invalid-argument', 'Choose a security operation.');
-  if (action.startsWith('files.')) return fileOperation(request, requireRecent);
+  if (action.startsWith('files.')) { await rateLimit(request, 'files', 600); return fileOperation(request, requireRecent); }
   await rateLimit(request, 'security', 120);
   if (['migrationItem', 'migrationFinalize'].includes(action)) return migrationOperation(request);
   return db.runTransaction(async transaction => {
-    const auth = await requireRecent(transaction, request, !['list', 'createKeys', 'migrationStatus'].includes(action));
+    const auth = await requireRecent(transaction, request, !['list', 'createKeys', 'migrationStatus', 'migrationCatalog', 'migrationCatalogStatus'].includes(action));
     const configRef = configFor(auth.uid);
     const current = (await transaction.get(configRef)).data();
     const migrationRef = migrationFor(auth.uid);
@@ -594,6 +595,17 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
     if (action === 'migrationStatus') {
       const receipts = migration ? await transaction.get(migrationRef.collection('receipts').select()) : null;
       return { migration: migration || null, config: current || null, completed: receipts?.docs.map(d => d.id) || [] };
+    }
+    if (action === 'migrationCatalog' || action === 'migrationCatalogStatus') {
+      if (!migration || migration.sessionId !== auth.id) throw new HttpsError('aborted', 'Migration claim changed.');
+      const source = (await transaction.get(db.doc(`users/${auth.uid}/catalog/collections`))).data();
+      const target = db.doc(`users/${auth.uid}/generations/${migration.record.generation}/catalog/collections`);
+      const existing = (await transaction.get(target)).data();
+      if (action === 'migrationCatalogStatus') return existing || { payload: null };
+      if (migration.phase === 'complete' || !source || source.revision !== request.data.sourceRevision || !validMetadata(request.data.payload, 2)) throw new HttpsError('aborted', 'Collection migration source changed.');
+      transaction.set(target, { payload: request.data.payload, revision: source.revision, itemEpoch: 0 });
+      transaction.update(migrationRef, { originalCatalog: source, migratedCatalog: request.data.payload });
+      return { saved: true };
     }
     if (action === 'list') {
       const owner = (await transaction.get(ownerRef)).data() as Owner;
@@ -706,7 +718,7 @@ async function migrationOperation(request: CallableRequest) {
     const staged = await target.doc(id).get();
     if (!original.exists || !staged.exists) throw new HttpsError('failed-precondition', 'Both generations must be present.');
     // Copy the original ciphertext to an Admin-only immutable safeguard before receipt.
-    const file = getStorage().bucket().file(`vaults/${uid}/${id}`);
+    const file = getStorage().bucket().file(original.data()?.staged ? `staged/${uid}/legacy/${id}` : `vaults/${uid}/${id}`);
     const backup = getStorage().bucket().file(`safeguards/${uid}/${generation}/${id}`);
     let fileInfo: any = null;
     try {
@@ -762,6 +774,9 @@ async function migrationOperation(request: CallableRequest) {
       const allSource = await t.get(source.select());
       const allTarget = await t.get(target.select());
       if (allSource.size !== allTarget.size || allSource.size !== latest.verified) throw new HttpsError('failed-precondition', 'Migration manifest mismatch.');
+      const sourceCatalog = (await t.get(db.doc(`users/${uid}/catalog/collections`))).data();
+      const targetCatalog = (await t.get(db.doc(`users/${uid}/generations/${generation}/catalog/collections`))).data();
+      if (sourceCatalog?.payload && (canonical(sourceCatalog) !== canonical(latest.originalCatalog) || canonical(targetCatalog?.payload) !== canonical(latest.migratedCatalog))) throw new HttpsError('failed-precondition', 'Collection migration is incomplete. Retain originals and retry.');
       t.set(configFor(uid), latest.record);
       t.update(migrationRef, { phase: 'complete', completedAt: Timestamp.now() });
       t.update(db.doc(`_vaultAccess/${uid}`), { generation: latest.record.generation, migrationPhase: 'complete' });
@@ -820,4 +835,9 @@ export const completeVaultRecovery = onCall(callableOptions, async request => {
     t.set(configFor(user.uid), next);
   });
   return issueSession(user.uid, credential.id, deviceDescription(request));
+});
+
+// Receipt-driven orphan cleanup only. Never purges trash or retained migration safeguards.
+export const cleanupAbandonedUpload = onObjectFinalized({ region: 'us-central1', retry: true }, async event => {
+  if (event.data.name?.startsWith('staged/')) await cleanupStagedObject(event.data.name, String(event.data.generation));
 });

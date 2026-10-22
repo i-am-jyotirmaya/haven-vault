@@ -1,4 +1,4 @@
-import { plaintextGeneration, plaintextIsCurrent } from './plaintext'
+import { plaintextGeneration, plaintextIsCurrent, registerPlaintextCleanup } from './plaintext'
 import { keyContext, validateKeyRecord } from './keys'
 import { securityCall } from './security'
 import {
@@ -128,7 +128,7 @@ function validateItem(value: unknown, expectedId: string): asserts value is Vaul
     typeof value.trashed !== 'boolean' ||
     (value.text !== undefined && typeof value.text !== 'string') ||
     (value.thumbnail !== undefined && (typeof value.thumbnail !== 'string' || value.thumbnail.length > 100_000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(value.thumbnail))) ||
-    (value.kind === 'note' && typeof value.text !== 'string')
+    (value.kind === 'note' && (typeof value.text !== 'string' || new TextEncoder().encode(value.text).byteLength !== value.size))
   ) {
     throw new Error('An item could not be read safely. Its metadata is invalid.')
   }
@@ -248,13 +248,13 @@ export async function listVaultItems(key: CryptoKey): Promise<VaultItem[]> {
   return items.map(item => displayCollection(item, catalog)).sort((a, b) => b.createdAt - a.createdAt)
 }
 
-export type FileOperation = { id: string; itemId: string; kind: 'upload' | 'write' | 'delete'; status: 'pending' | 'cancelling' | 'cancelled' | 'deleting' | 'completed'; payload: EncryptedPayload; bytes: number; hash: string | null; revision?: number }
+export type FileOperation = { id: string; itemId: string; kind: 'upload' | 'write' | 'delete'; status: 'pending' | 'cancelling' | 'cancelled' | 'deleting' | 'completed' | 'retired'; payload: EncryptedPayload; bytes: number; hash: string | null; revision?: number }
 export function fileCall<T = { operation: FileOperation }>(key: CryptoKey, action: string, fields: Record<string, unknown> = {}) {
   return securityCall<T>(`files.${action}`, { generation: keyContext(key)?.generation || 'legacy', ...fields })
 }
 export type VaultCollection = { id: string; name: string; legacyNames: string[] }
 export type CollectionCatalog = { revision: number; itemEpoch: number; entries: VaultCollection[] }
-const catalogs = new WeakMap<CryptoKey, CollectionCatalog>()
+let catalogs = new WeakMap<CryptoKey, CollectionCatalog>()
 const PERSONAL_ID = '00000000-0000-4000-8000-000000000001'
 export function displayCollection(item: VaultItem, catalog: CollectionCatalog): VaultItem {
   const entry = catalog.entries.find(c => item.collectionId ? c.id === item.collectionId : c.legacyNames.includes(item.collection))
@@ -262,7 +262,8 @@ export function displayCollection(item: VaultItem, catalog: CollectionCatalog): 
 }
 export async function loadCollections(key: CryptoKey, items: VaultItem[] = []): Promise<CollectionCatalog> {
   const check = sensitiveGuard()
-  const data = await fileCall<{ catalog: { payload?: EncryptedPayload; revision?: number; itemEpoch?: number } | null }>(key, 'list')
+  const data = await fileCall<{ catalog: { payload?: EncryptedPayload; revision?: number; itemEpoch?: number } | null; migrationPending?: boolean }>(key, 'list')
+  check()
   const current = data.catalog
   if (current?.payload) {
     const entries = await decryptJson<VaultCollection[]>(key, current.payload, 'collections')
@@ -278,6 +279,7 @@ export async function loadCollections(key: CryptoKey, items: VaultItem[] = []): 
   }
   const catalog = { entries, revision: current?.revision || 0, itemEpoch: current?.itemEpoch || 0 }
   catalogs.set(key, catalog)
+  if (data.migrationPending) return catalog // Read-only unlock remains available so Security can resume migration.
   try { return await saveCollections(key, catalog, entries) }
   catch (error) { catalogs.delete(key); throw error }
 }
@@ -306,20 +308,37 @@ async function collectionFields(key: CryptoKey, name?: string) {
   if (!entry) throw new Error('This collection changed. Reload collections and choose a destination.')
   return { collection: entry.name, collectionId: entry.id }
 }
-const writes = new WeakMap<CryptoKey, Map<string, { signature: string; id: string; item: VaultItem; payload: EncryptedPayload; catalogRevision: number }>>()
+let writes = new WeakMap<CryptoKey, Map<string, { signature: string; id: string; item: VaultItem; payload: EncryptedPayload; catalogRevision: number }>>()
+const activeWriteCaches = new Set<Map<string, { signature: string; item: VaultItem }>>()
+registerPlaintextCleanup(() => {
+  for (const cache of activeWriteCaches) {
+    for (const prepared of cache.values()) {
+      prepared.signature = ''
+      prepared.item.name = ''; prepared.item.collection = ''; prepared.item.text = undefined; prepared.item.thumbnail = undefined
+    }
+    cache.clear()
+  }
+  activeWriteCaches.clear(); writes = new WeakMap(); catalogs = new WeakMap()
+})
 async function writeItem(key: CryptoKey, draft: VaultItem, kind: 'write' | 'delete', identity = draft.id): Promise<FileOperation> {
   const check = sensitiveGuard()
   let pending = writes.get(key)
-  if (!pending) { pending = new Map(); writes.set(key, pending) }
+  if (!pending) { pending = new Map(); writes.set(key, pending); activeWriteCaches.add(pending) }
   const signature = JSON.stringify({ ...draft, updatedAt: 0 })
   let prepared = pending.get(identity)
   if (prepared && prepared.signature !== signature) throw new Error('A previous change is unconfirmed. Reload and reconcile it before changing this draft.')
   if (!prepared) {
-    prepared = { signature, id: draft.deleting || crypto.randomUUID(), item: draft, payload: await encryptMetadata(key, draft), catalogRevision: catalogs.get(key)?.revision || 0 }; check()
+    prepared = { signature, id: draft.deleting || (draft.revision ? crypto.randomUUID() : draft.id), item: draft, payload: await encryptMetadata(key, draft), catalogRevision: catalogs.get(key)?.revision || 0 }; check()
     pending.set(identity, prepared)
   }
   check()
-  if (!draft.deleting) await fileCall(key, 'begin', { id: prepared.id, itemId: draft.id, kind, payload: prepared.payload, expectedRevision: draft.revision || 0, catalogRevision: prepared.catalogRevision })
+  if (!draft.deleting) {
+    try { await fileCall(key, 'begin', { id: prepared.id, itemId: draft.id, kind, payload: prepared.payload, expectedRevision: draft.revision || 0, catalogRevision: prepared.catalogRevision }) }
+    catch (error) {
+      if (['functions/aborted', 'functions/invalid-argument', 'functions/failed-precondition'].includes((error as { code?: string }).code || '')) pending.delete(identity)
+      throw error
+    }
+  }
   check()
   const result = await fileCall(key, 'finalize', { id: prepared.id }); check()
   if (result.operation.status !== 'completed') throw new Error('Write is unfinished. Reconcile or retry cleanup.')
@@ -381,28 +400,40 @@ export async function transferUpload(key: CryptoKey, prepared: PreparedUpload, c
   if (result.operation.status !== 'completed') throw new Error('Upload is not complete. Retry cleanup or finalization.')
   return { ...item, revision: result.operation.revision, objectBytes: encrypted.size }
 }
+export async function resumeUploadReceipt(key: CryptoKey, id: string): Promise<VaultItem> {
+  const check = sensitiveGuard()
+  const result = await fileCall(key, 'finalize', { id }); check()
+  if (result.operation.status !== 'completed') throw new Error('Transfer is incomplete. Cancel cleanup, then reselect the original file.')
+  const item = await decryptJson<VaultItem>(key, result.operation.payload, `metadata:${id}`); check(); validateItem(item, id)
+  return { ...item, revision: result.operation.revision, objectBytes: result.operation.bytes }
+}
 export async function uploadVaultFile(key: CryptoKey, file: File, collection?: string, control: UploadControl = {}): Promise<VaultItem> {
   const prepared = await prepareUpload(key, file, collection, control); control.prepared?.(prepared)
   return transferUpload(key, prepared, control)
+}
+async function confirmedItem(key: CryptoKey, operation: FileOperation): Promise<VaultItem> {
+  const check = sensitiveGuard()
+  const saved = await decryptJson<VaultItem>(key, operation.payload, `metadata:${operation.itemId}`); check(); validateItem(saved, operation.itemId)
+  return { ...saved, revision: operation.revision }
 }
 export async function saveVaultNote(key: CryptoKey, title: string, text: string, collection?: string, identity = crypto.randomUUID()): Promise<VaultItem> {
   const check = sensitiveGuard()
   const cached = writes.get(key)?.get(identity)
   if (cached) {
     if (cached.item.name !== title.trim() || cached.item.text !== text || cached.item.collection !== normalizeCollection(collection)) throw new Error('The previous save is unconfirmed. Reload and reconcile it before changing the draft.');
-    const operation = await writeItem(key, cached.item, 'write', identity); check(); return { ...cached.item, revision: operation.revision }
+    const operation = await writeItem(key, cached.item, 'write', identity); check(); return confirmedItem(key, operation)
   }
-  const now = Date.now(), item: VaultItem = { id: crypto.randomUUID(), name: title.trim(), kind: 'note', mimeType: 'text/plain', size: new TextEncoder().encode(text).byteLength, createdAt: now, updatedAt: now, favorite: false, ...(await collectionFields(key, collection)), trashed: false, text }
+  const now = Date.now(), item: VaultItem = { id: identity, name: title.trim(), kind: 'note', mimeType: 'text/plain', size: new TextEncoder().encode(text).byteLength, createdAt: now, updatedAt: now, favorite: false, ...(await collectionFields(key, collection)), trashed: false, text }
   check(); validateItem(item, item.id)
   const result = await writeItem(key, item, 'write', identity)
-  return { ...item, revision: result.revision }
+  return confirmedItem(key, result)
 }
 export async function updateVaultItem(key: CryptoKey, item: VaultItem): Promise<void> {
   const check = sensitiveGuard()
-  const updated = { ...item, ...(await collectionFields(key, item.collection)) }
+  const updated = { ...item, ...(await collectionFields(key, item.collection)), updatedAt: Math.max(Date.now(), item.createdAt) }
   check(); validateItem(updated, item.id)
   const result = await writeItem(key, updated, 'write')
-  item.revision = result.revision
+  Object.assign(item, await confirmedItem(key, result))
 }
 
 export async function downloadVaultFile(key: CryptoKey, item: VaultItem): Promise<Blob> {
@@ -427,13 +458,16 @@ export async function permanentlyDeleteVaultItem(item: VaultItem, key: CryptoKey
   await writeItem(key, item, 'delete')
 }
 export async function reconcileOperations(key: CryptoKey) {
+  const check = sensitiveGuard()
   const { operations } = await fileCall<{ operations: FileOperation[] }>(key, 'list')
   const results: { id: string; state: string }[] = []
   for (const operation of operations) {
+    check()
     try { const result = await fileCall(key, 'finalize', { id: operation.id }); results.push({ id: operation.id, state: result.operation.status }) }
     catch { results.push({ id: operation.id, state: operation.status === 'pending' ? 'Reselect original or retry finalization' : 'Cleanup pending; reconnect and retry' }) }
   }
+  check()
   const pending = writes.get(key)
-  if (pending) for (const [identity, write] of pending) { const status = await fileCall(key, 'status', { id: write.id }); if (status.operation && ['completed', 'cancelled'].includes(status.operation.status)) pending.delete(identity) }
+  if (pending) for (const [identity, write] of pending) { const status = await fileCall(key, 'status', { id: write.id }); if (!status.operation || ['completed', 'cancelled', 'retired'].includes(status.operation.status)) pending.delete(identity) }
   return results
 }

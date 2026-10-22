@@ -19,6 +19,7 @@ vi.mock('firebase-functions/params', () => ({
   defineString: (_name: string, options?: { default?: string }) => ({ value: () => options?.default ?? '' }),
   defineBoolean: () => ({ value: () => mocks.appCheck }),
 }));
+vi.mock('firebase-functions/v2/storage', () => ({ onObjectFinalized: (_options: unknown, handler: unknown) => handler }));
 vi.mock('firebase-functions/v2/https', async importOriginal => ({
   ...await importOriginal<typeof import('firebase-functions/v2/https')>(),
   onCall: (_options: unknown, handler: unknown) => handler,

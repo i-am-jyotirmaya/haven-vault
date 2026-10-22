@@ -429,3 +429,12 @@ html[data-haven-concealed] .privacy-screen {
 .operation-row progress { max-width: 100%; }
 .file-actions { flex-wrap: wrap; }
 .storage-summary p { overflow-wrap: anywhere; }
+.storage-details { margin-top: 10px; font-size: 11px; color: #596953; }
+.storage-details p { margin-top: 8px; font-size: 12px; line-height: 1.6; color: #596953; }
+.security-panel { margin: 24px 0; padding: 18px; border: 1px solid #d8ded0; border-radius: 12px; }
+.security-feedback { margin: 14px 0; padding: 14px 16px; border: 1px solid #c7d6df; border-radius: 10px; background: #f0f6fa; color: #253e4e; scroll-margin: 28px; }
+.security-feedback p { margin: 6px 0 0; }
+.security-feedback.success { background: #edf7ed; color: #214c2c; border-color: #a3c9aa; }
+.security-feedback.error { background: #fff1ef; color: #7b2924; border-color: #dda29c; }
+.security-feedback:focus, .recovery-confirm h3:focus { outline: 2px solid #72915c; outline-offset: 4px; }
+@media(max-width:590px) { .security-center { padding: 16px; } .security-panel { padding: 14px; } }

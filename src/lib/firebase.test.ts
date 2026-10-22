@@ -44,6 +44,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.spyOn(performance, 'now').mockReturnValue(0);
   vi.clearAllMocks();
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { hostname: 'example.test' } }));
   vi.stubGlobal('document', { visibilityState: 'visible', hasFocus: vi.fn(() => true) });
   for (const variable of ['API_KEY', 'AUTH_DOMAIN', 'PROJECT_ID', 'STORAGE_BUCKET', 'MESSAGING_SENDER_ID', 'APP_ID']) {
     vi.stubEnv(`VITE_FIREBASE_${variable}`, 'test-project');
@@ -263,7 +264,7 @@ describe('emulator isolation', () => {
   it('connects every service locally even with production browser configuration present', async () => {
     vi.stubEnv('MODE', 'emulator');
     vi.stubEnv('DEV', true);
-    vi.stubGlobal('window', { location: { hostname: 'localhost' } });
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { hostname: 'localhost' } }));
     const session = await import('./firebase');
     expect(session.isVaultBackendReady).toBe(true);
     expect(mocks.connectAuth).toHaveBeenCalledWith(mocks.auth, 'http://127.0.0.1:9099');
@@ -287,7 +288,7 @@ describe('emulator isolation', () => {
     vi.resetModules();
   vi.spyOn(performance, 'now').mockReturnValue(0);
     vi.stubEnv('DEV', false);
-    vi.stubGlobal('window', { location: { hostname: 'localhost' } });
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { hostname: 'localhost' } }));
     await expect(import('./firebase')).rejects.toThrow('local development');
     expect(mocks.initializeAuth).not.toHaveBeenCalled();
   });

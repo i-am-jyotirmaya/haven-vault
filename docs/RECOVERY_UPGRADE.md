@@ -153,3 +153,14 @@ reconcile those writes in an offline reviewed recovery procedure first. An app
 rollback to v1 cannot read v2 ciphertext; it must not overwrite the config. This
 release deliberately implements no original-generation deletion or automatic
 rollback and is not a full backup/export system.
+
+### Privacy while verifying a passkey
+
+Haven conceals on browser blur as well as actual hidden/pagehide/freeze events.
+Focus changes from Haven's own credential UI are scoped so an otherwise visible
+passkey prompt does not conceal or abort the operation. A real background event
+still conceals and uses your existing grace period; on return, a sensitive
+operation waits for session validation before continuing. Locking or signing out
+cancels the waiting operation. No prompt renews inactivity or session expiry.
+Some browsers keep tab-switcher thumbnails or omit browser-chrome lifecycle
+signals. Haven cannot guarantee erasing those snapshots; verify your device.

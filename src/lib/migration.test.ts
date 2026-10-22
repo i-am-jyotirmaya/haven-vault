@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { createVault, encryptJson, decryptJson, encryptFile, type LegacyVaultConfig } from './crypto'
 import { unlockKeyRecord, type KeyRecord } from './keys'
-const state = vi.hoisted(() => ({ docs: new Map<string, any>(), files: new Map<string, Blob>(), migration: null as any, config: null as any, fail: '', completed: new Set<string>(), uploads: 0, forbiddenWrites: 0 }))
+const state = vi.hoisted(() => ({ catalogPayload: null as any, docs: new Map<string, any>(), files: new Map<string, Blob>(), migration: null as any, config: null as any, fail: '', completed: new Set<string>(), uploads: 0, forbiddenWrites: 0 }))
 vi.mock('./firebase', () => ({ db: {}, storage: {}, getVaultUserId: () => 'owner', validateVaultSession: async () => {} }))
 vi.mock('firebase/firestore', () => ({
   collection: (_db: unknown, ...parts: string[]) => parts.join('/'), doc: (_db: unknown, ...parts: string[]) => parts.join('/'),
@@ -17,6 +17,8 @@ vi.mock('firebase/storage', () => ({
 vi.mock('./vault', () => ({ listVaultItems: async () => [] }))
 vi.mock('./security', () => ({ securityCall: async (action: string, data: any = {}) => {
   if (state.fail === action) { state.fail = ''; throw new Error('Fictional interruption') }
+  if (action === 'migrationCatalog') { state.catalogPayload = data.payload; return { saved: true } }
+  if (action === 'migrationCatalogStatus') return { payload: state.catalogPayload }
   if (action === 'migrationStatus') return { migration: state.migration, config: state.config, completed: [...state.completed] }
   if (action === 'migrationBegin') { state.migration ??= { phase: 'staging', record: data.record }; return { migration: state.migration } }
   if (action === 'migrationItem') state.completed.add(data.id)
@@ -85,4 +87,23 @@ it('reuses verified receipts after a rate-limit-style interruption while recheck
   state.fail = 'migrationItem'
   await expect(migrateVault(phrase, legacy, () => {}, () => {})).resolves.toHaveProperty('config.version', 2)
   expect(state.fail).toBe('migrationItem')
+})
+
+it('migrates operation-staged legacy objects and encrypted empty collection definitions', async () => {
+  const oldKey = await (await import('./crypto')).unlockVault(phrase, legacy)
+  const value = await decryptJson<any>(oldKey, original.payload, `metadata:${id}`)
+  original = { payload: await encryptJson(oldKey, { ...value, staged: true }, `metadata:${id}`), staged: true, revision: 2 }
+  state.docs.set(`users/owner/items/${id}`, original)
+  state.files.set(`staged/owner/legacy/${id}`, state.files.get(`vaults/owner/${id}`)!)
+  state.files.delete(`vaults/owner/${id}`)
+  const definitions = [{ id, name: 'Empty fixture collection', legacyNames: [] }]
+  state.docs.set('users/owner/catalog/collections', { revision: 4, payload: await encryptJson(oldKey, definitions, 'collections') })
+  const result = await migrateVault(phrase, legacy, () => {}, () => {})
+  const migrated = state.docs.get(`users/owner/generations/${result.config.generation}/items/${id}`)
+  expect((await decryptJson<any>(result.key, migrated.payload, `metadata:${id}`)).staged).toBe(false)
+  expect(state.files.has(`staged/owner/legacy/${id}`)).toBe(true)
+  expect(await decryptJson(result.key, state.catalogPayload, 'collections')).toEqual(definitions)
+  const retried = await migrateVault(phrase, legacy, () => {}, () => {})
+  expect(retried.config.generation).toBe(result.config.generation)
+  expect(state.uploads).toBe(1)
 })

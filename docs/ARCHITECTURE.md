@@ -123,3 +123,13 @@ Use `pnpm dev` with `?demo=1` for local UI work. `pnpm test:rules` starts Firest
 Production bootstrap and signature checks remain active in local integration. `localhost` and `127.0.0.1` are distinct passkey identities. Normal `pnpm dev` still contacts the configured Firebase project.
 
 Alternatively, deploy a separate staging Firebase project and hostname with its own passkeys, using non-sensitive fixtures. Production credentials will not work on the staging hostname.
+
+## Dependable item and collection operations
+
+See [FILE_OPERATIONS.md](FILE_OPERATIONS.md) for the encrypted receipt lifecycle,
+immutable staging and late-object cleanup, item/catalog CAS and item epochs,
+collection-name migration, deletion ordering, memory bounds, usage and limits.
+The existing `securityOperation` callable, private-session authority and active
+key generation are reused. No parallel authentication or encryption format is
+introduced. Direct active item writes are denied so stale clients cannot bypass
+revision checks; migration-only inactive generation creation remains supported.

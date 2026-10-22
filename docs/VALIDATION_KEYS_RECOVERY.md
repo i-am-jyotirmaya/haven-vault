@@ -62,3 +62,64 @@ Firebase generation authorization, migration interleavings and operational
 recovery/rollback. These are automated checks plus implementation review by its
 author; they are not an independent security audit or a basis for recommending
 irreplaceable primary storage.
+
+## Follow-up: recovery setup, feedback and privacy events
+
+User testing found that recovery setup appeared to stop after a passkey prompt,
+passphrase success feedback was hard to find, and the privacy screen reacted to
+credential focus changes while missing ordinary visible-window backgrounding.
+Confirmed causes were a shared passphrase field validated only after the prompt,
+feedback located away from the action, unconditionally concealing on every focus,
+no window-blur listener, and a missing `sensitive-surface` ID on the actual roots.
+
+The follow-up gives recovery its own current-passphrase form and validates the
+passphrase locally before asking for a passkey. Progress/error/verified-success
+feedback is scoped to each action and brought into view. The downloaded kit must
+still be confirmed, committed and read back before recovery is reported saved.
+
+Both rendered roots are now synchronously hidden and inert behind the privacy
+screen. Focus by itself does not start a conceal/validation cycle; window blur
+starts the original configured background deadline. App-initiated credential UI
+has a bounded focus-only exception (at most 75 seconds while open, then at most
+250 ms for a closing focus transition). Actual hidden/pagehide/freeze events,
+inactivity, absolute session expiry and manual lock/sign-out are never exempt.
+On platforms that truly hide a page during native UI, sensitive continuations
+wait for return validation and are cancelled if their component locks/unmounts.
+
+New committed tests combine the real local key/recovery cryptography, actual
+security workflow and privacy hook with mocked Firebase/native-UI boundaries.
+They verify successful kit preparation/download/confirmation/commit, real
+passphrase rewrapping, early wrong-passphrase rejection, blur/focus ordering,
+true-hidden native prompts, validation before resumption and cancellation on
+lock. Separate tests cover bounded prompt state and unchanged inactivity/session
+expiry while a prompt is open.
+
+A Chromium 153.0.8010.0 browser check also completed setup, kit download/confirmation
+and passphrase change using real WebAuthn assertions from a CDP virtual resident
+P-256 authenticator. Firebase calls used fictional browser fixtures and native
+popup focus events were simulated. Actual CSS visibility and inert behavior,
+privacy overlays and screenshots were checked at 1280×900 and 390×844. No page
+errors occurred. This supersedes the earlier inability to install a browser:
+a locally available serverless Chromium distribution was used for the follow-up.
+Physical phone tab-switcher/app-switcher snapshots and real OS biometric UI remain
+unexecuted device checks. Browsers do not expose every browser-chrome transition
+and may retain an earlier thumbnail; this is not screenshot prevention.
+
+Primary platform references consulted:
+- https://html.spec.whatwg.org/multipage/interaction.html#page-visibility
+- https://developer.chrome.com/docs/web-platform/page-lifecycle-api
+- https://simplewebauthn.dev/docs/13.3.x/packages/browser
+
+No backend cryptographic format, authorization rule, deployed infrastructure or
+real-vault data was changed by this follow-up. Main's merged #5 test-isolation
+changes are integrated, preserving the full emulator CI step.
+
+Follow-up final checks: the configured Node 22 unit/UI suite passes, including
+an interrupted recovery acknowledgement that must not later be described as an
+unchanged cancellation. Recovery kit IDs are visible in Security so the saved
+file can be compared after an unconfirmed save. Backend policy/configuration
+checks, TypeScript and the production build pass. No deployment was performed.
+
+Authenticated recovery drafts also follow the configured grace while concealed;
+ordinary unlock drafts still clear immediately. A regression test checks return
+within grace and cleanup at the original deadline without signing out.

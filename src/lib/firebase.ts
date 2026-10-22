@@ -1,3 +1,4 @@
+import { runCredentialPrompt, clearCredentialPrompts } from './credentialPrompt'
 import { initializeApp, getApps } from 'firebase/app'
 import {
   GoogleAuthProvider,
@@ -193,7 +194,7 @@ export async function enrollPasskey(confirmRegistration: ConfirmRegistration): P
     checkAuthenticationGeneration(generation)
     const provider = new GoogleAuthProvider()
     provider.setCustomParameters({ prompt: 'select_account' })
-    await signInWithPopup(services.auth, provider)
+    await runCredentialPrompt(() => signInWithPopup(services.auth, provider))
     checkAuthenticationGeneration(generation)
     const optionsCall = httpsCallable<Record<string, never>, ChallengeResponse<RegistrationOptions>>(
       services.functions,
@@ -206,7 +207,7 @@ export async function enrollPasskey(confirmRegistration: ConfirmRegistration): P
     const response = await confirmRegistration(() => {
       checkAuthenticationGeneration(generation)
       requireFocusedDocument()
-      return startRegistration({ optionsJSON: data.options })
+      return runCredentialPrompt(() => startRegistration({ optionsJSON: data.options }))
     })
     checkAuthenticationGeneration(generation)
     const verifyCall = httpsCallable<
@@ -245,7 +246,7 @@ export async function signInWithPasskey(): Promise<void> {
     const { data } = await optionsCall({})
     checkAuthenticationGeneration(generation)
     requireFocusedDocument()
-    const response = await startAuthentication({ optionsJSON: data.options })
+    const response = await runCredentialPrompt(() => startAuthentication({ optionsJSON: data.options }))
     checkAuthenticationGeneration(generation)
     const verifyCall = httpsCallable<
       { challengeId: string; response: typeof response },
@@ -266,6 +267,7 @@ export async function signInWithPasskey(): Promise<void> {
 }
 
 export async function signOutVault(): Promise<{ revoked: boolean }> {
+  clearCredentialPrompts()
   authenticationGeneration++
   clearLocalSession()
   if (!auth) return { revoked: true }
@@ -314,7 +316,7 @@ export async function verifyRecoveryOwner() {
   const generation = authenticationGeneration
   const provider = new GoogleAuthProvider()
   provider.setCustomParameters({ prompt: 'select_account' })
-  await signInWithPopup(services.auth, provider)
+  await runCredentialPrompt(() => signInWithPopup(services.auth, provider))
   checkAuthenticationGeneration(generation)
 }
 export function beginRecoverySessionClock() { sessionNow = createSecurityClock(); return sessionNow() }

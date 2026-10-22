@@ -57,7 +57,7 @@ if (require.main === module) {
         args[1] = 'emulators:start';
         if (fs.existsSync(path.join(root, '.emulator-data/firebase-export-metadata.json'))) args.push('--import', '.emulator-data');
         args.push('--export-on-exit', '.emulator-data');
-      } else args.push('node --test --test-concurrency=1 functions/test/local.test.mjs functions/test/rules.test.mjs functions/test/security.local.test.mjs');
+      } else args.push('node --test --test-concurrency=1 functions/test/local.test.mjs functions/test/rules.test.mjs functions/test/security.local.test.mjs functions/test/file-operations.local.test.mjs');
       run(action === 'start' ? ['scripts/local-dev.cjs', ...args] : args);
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }

@@ -1,12 +1,13 @@
 import { keyContext } from './keys'
 import { securityCall } from './security'
-import { prepareUpload, transferUpload, validateUpload, type PreparedUpload, type VaultItem } from './vault'
+import { prepareUpload, transferUpload, resumeUploadReceipt, validateUpload, type PreparedUpload, type VaultItem } from './vault'
 export type UploadState = 'queued' | 'encrypting' | 'uploading' | 'finalizing' | 'completed' | 'failed' | 'cancelling' | 'cancelled'
 export type QueueEntry = { id: string; name: string; state: UploadState; transferred: number; total: number; error?: string }
 export const operationGuidance = (error: unknown) => {
   const code = String((error as { code?: string })?.code || '')
   if (/unauthenticated|permission-denied/.test(code)) return 'Session expired or access denied. Sign in and unlock, then reconcile operations.'
   if (/quota|resource-exhausted/.test(code)) return 'Storage quota rejected the operation. Free capacity with your storage provider, then retry or cancel cleanup.'
+  if (/failed-precondition|not-found/.test(code)) return 'Transfer or vault state is incomplete. Reload and reconcile. If the original is needed, cancel its receipt and select the file again; plaintext is never cached.'
   if (/aborted|already-exists/.test(code)) return 'The entry or collections changed. Reload the latest version before retrying; your draft remains until locking.'
   if (typeof navigator !== 'undefined' && !navigator.onLine) return 'Offline. Reconnect and retry. Remote completion or cleanup is not yet confirmed.'
   return 'Operation could not be confirmed. Retry after reconnecting, or reload to reconcile its receipt. No successful files will be uploaded again.'
@@ -35,7 +36,6 @@ export class UploadQueue {
   retry(id: string) {
     const entry = this.entries.find(e => e.id === id)
     if (!entry || entry.state !== 'failed') return
-    if (!this.files.has(id) && !this.encrypted.has(id)) return
     entry.state = 'queued'; entry.error = undefined; this.emit(); void this.pump()
   }
   async cancel(id: string) {
@@ -77,9 +77,20 @@ export class UploadQueue {
           let prepared = this.encrypted.get(entry.id)
           if (!prepared) {
             const file = this.files.get(entry.id)
-            if (!file) throw new Error('Reselect original file')
+            if (!file) {
+              entry.state = 'finalizing'; this.emit()
+              const item = await resumeUploadReceipt(this.key, entry.id)
+              control.check(); controller.signal.throwIfAborted()
+              entry.state = 'completed'; this.saved(item); continue
+            }
             prepared = await prepareUpload(this.key, file, this.destinations.get(entry.id), control)
             control.check(); controller.signal.throwIfAborted()
+            // Retain at most one full encrypted retry buffer, even if many files fail.
+            for (const oldId of this.encrypted.keys()) {
+              this.encrypted.delete(oldId)
+              const old = this.entries.find(e => e.id === oldId)
+              if (old) old.error = 'Retry buffer released to limit memory. Retry finalization; if transfer is incomplete, cancel cleanup then reselect the original file.'
+            }
             this.encrypted.set(entry.id, prepared); this.files.delete(entry.id)
           }
           const item = await transferUpload(this.key, prepared, control)

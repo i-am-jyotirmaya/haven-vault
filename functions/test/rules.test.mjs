@@ -95,13 +95,14 @@ test("an active owner session can use encrypted documents and immutable encrypte
   const context = environment.authenticatedContext(owner, claims());
   const item = doc(context.firestore(), "users/owner/items/valid-item");
   const object = ref(context.storage(), "vaults/owner/valid-item");
-  await assertSucceeds(setDoc(item, { payload: envelope }));
+  await assertFails(setDoc(item, { payload: envelope }));
+  await environment.withSecurityRulesDisabled(async admin => { await setDoc(doc(admin.firestore(), "users/owner/items/valid-item"), { payload: envelope }); await uploadBytes(ref(admin.storage(), "vaults/owner/valid-item"), cipherBytes, cipherMetadata); });
   assert.equal((await assertSucceeds(getDoc(item))).data().payload.version, 1);
-  await assertSucceeds(uploadBytes(object, cipherBytes, cipherMetadata));
+  await assertFails(uploadBytes(object, cipherBytes, cipherMetadata));
   assert.equal((await assertSucceeds(getBytes(object))).byteLength, cipherBytes.length);
   await assertFails(uploadBytes(object, cipherBytes, cipherMetadata));
-  await assertSucceeds(deleteObject(object));
-  await assertSucceeds(deleteDoc(item));
+  await assertFails(deleteObject(object));
+  await assertFails(deleteDoc(item));
 });
 
 test("configuration is validated and cannot be replaced or deleted", async () => {
@@ -207,4 +208,22 @@ test("generation authority freezes old clients and restricts staging to its clai
   });
   await assertSucceeds(getBytes(ref(context.storage(), object)));
   await assertFails(uploadBytes(ref(context.storage(), `generations/owner/${generation}/33333333-3333-4333-8333-333333333333`), cipherBytes, cipherMetadata));
+});
+
+
+test("operation-staged objects require server receipts, enforce sizes and close on cancellation", async () => {
+  const id = "44444444-4444-4444-8444-444444444444";
+  const context = environment.authenticatedContext(owner, claims());
+  const path = `staged/owner/legacy/${id}`;
+  const receipt = `users/owner/operations/${id}`;
+  await assertFails(uploadBytes(ref(context.storage(), path), cipherBytes, cipherMetadata));
+  await environment.withSecurityRulesDisabled(async admin => { await setDoc(doc(admin.firestore(), receipt), { status: 'pending', kind: 'upload', bytes: cipherBytes.length }); });
+  await assertFails(uploadBytes(ref(context.storage(), path), new Uint8Array(44), cipherMetadata));
+  await assertSucceeds(uploadBytes(ref(context.storage(), path), cipherBytes, cipherMetadata));
+  await assertFails(uploadBytes(ref(context.storage(), path), cipherBytes, cipherMetadata));
+  await assertFails(deleteObject(ref(context.storage(), path)));
+  await environment.withSecurityRulesDisabled(async admin => { await setDoc(doc(admin.firestore(), receipt), { status: 'cancelling', kind: 'upload', bytes: cipherBytes.length }); });
+  await assertFails(getBytes(ref(context.storage(), path)));
+  await environment.withSecurityRulesDisabled(async admin => { await deleteObject(ref(admin.storage(), path)); });
+  await assertFails(uploadBytes(ref(context.storage(), path), cipherBytes, cipherMetadata));
 });

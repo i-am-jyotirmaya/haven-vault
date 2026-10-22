@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   signIn: vi.fn(), enroll: vi.fn(), signOut: vi.fn(), validate: vi.fn(),
   getConfig: vi.fn(), unlock: vi.fn(), create: vi.fn(), saveConfig: vi.fn(),
-  list: vi.fn(), download: vi.fn(), saveNote: vi.fn(),
+  list: vi.fn(), download: vi.fn(), saveNote: vi.fn(), update: vi.fn(), remove: vi.fn(), saveCatalog: vi.fn(),
   deadline: 0, authenticated: false,
   config: { version: 1, salt: 'fictional', iterations: 600000, verifier: {} },
   key: {} as CryptoKey,
@@ -27,8 +27,8 @@ vi.mock('./lib/crypto', () => ({ unlockVault: mocks.unlock, createVault: mocks.c
 vi.mock('./lib/vault', () => ({
   getVaultConfig: mocks.getConfig, listVaultItems: mocks.list, downloadVaultFile: mocks.download,
   saveVaultConfig: mocks.saveConfig, saveVaultNote: mocks.saveNote,
-  reconcileOperations: vi.fn(async () => []), loadCollections: vi.fn(async () => ({ revision: 1, itemEpoch: 0, entries: [{ id: 'personal', name: 'Personal', legacyNames: ['Personal'] }, { id: 'secret', name: 'Secret collection', legacyNames: ['Secret collection'] }] })), fileCall: vi.fn(async () => ({ objectBytes: 39 })), saveCollections: vi.fn(), displayCollection: (item: unknown) => item,
-  permanentlyDeleteVaultItem: vi.fn(), updateVaultItem: vi.fn(), uploadVaultFile: vi.fn(), MAX_FILE_SIZE: 50 * 1024 * 1024,
+  reconcileOperations: vi.fn(async () => []), loadCollections: vi.fn(async () => ({ revision: 1, itemEpoch: 0, entries: [{ id: 'personal', name: 'Personal', legacyNames: ['Personal'] }, { id: 'secret', name: 'Secret collection', legacyNames: ['Secret collection'] }] })), fileCall: vi.fn(async () => ({ objectBytes: 39 })), saveCollections: mocks.saveCatalog, displayCollection: (item: unknown) => item,
+  permanentlyDeleteVaultItem: mocks.remove, updateVaultItem: mocks.update, uploadVaultFile: vi.fn(), MAX_FILE_SIZE: 50 * 1024 * 1024,
 }));
 import App from './App';
 
@@ -75,11 +75,13 @@ beforeEach(() => {
   mocks.create.mockResolvedValue({ key: mocks.key, config: mocks.config });
   mocks.saveConfig.mockResolvedValue(undefined);
   mocks.list.mockResolvedValue([file]);
+  mocks.update.mockResolvedValue(undefined); mocks.remove.mockResolvedValue(undefined);
+  mocks.saveCatalog.mockImplementation(async (_key, current, entries) => ({ ...current, entries, revision: current.revision + 1 }));
   mocks.download.mockResolvedValue(new Blob(['private pixels'], { type: 'image/jpeg' }));
   mocks.saveNote.mockResolvedValue({ ...file, kind: 'note', name: 'Late private note', text: 'private contents' });
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-  HTMLDialogElement.prototype.showModal = vi.fn();
-  HTMLDialogElement.prototype.close = vi.fn();
+  HTMLDialogElement.prototype.showModal = vi.fn(function(this: HTMLDialogElement) { this.setAttribute('open', ''); });
+  HTMLDialogElement.prototype.close = vi.fn(function(this: HTMLDialogElement) { this.removeAttribute('open'); });
   URL.createObjectURL = vi.fn(() => 'blob:private');
   URL.revokeObjectURL = vi.fn();
 });
@@ -543,4 +545,126 @@ it('applies configured locking to recovery secrets before authentication and cle
   fireEvent.change(screen.getByLabelText('Recovery kit file contents'), { target: { value: 'another fictional kit' } })
   hide(); fireEvent.click(screen.getByRole('button', { name: 'Sign out now' })); show(); await flush()
   expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
+})
+
+
+describe('everyday item operation feedback', () => {
+  const actions = async (name = file.name) => { fireEvent.click(screen.getByRole('button', { name: `Actions for ${name}` })); await flush(); };
+  it('renaming remains pending until confirmed and updates the visible item after confirmation', async () => {
+    let finish!: () => void; mocks.update.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    await openVault(); await actions(); fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'new fictional name' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Save change' }).closest('form')!); await flush();
+    expect(screen.getByRole('button', { name: `Preview ${file.name}` })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Saving…' }).hasAttribute('disabled')).toBe(true);
+    await act(async () => { finish(); });
+    expect(screen.getByRole('button', { name: 'Preview new fictional name' })).toBeTruthy();
+  });
+  it('moving chooses a collection and saves a confirmed membership change', async () => {
+    await openVault(); await actions(); fireEvent.click(screen.getByRole('button', { name: 'Move to collection' }));
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'Personal' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Save change' }).closest('form')!); await flush();
+    expect(mocks.update).toHaveBeenCalledWith(mocks.key, expect.objectContaining({ collection: 'Personal' }));
+    expect(screen.getByText('Change saved.')).toBeTruthy();
+  });
+  it('stale note edits preserve the draft, expose reload and are cleared on lock', async () => {
+    const note = { ...file, kind: 'note', name: 'fictional note', text: 'old contents', revision: 3 };
+    mocks.list.mockResolvedValue([note]); mocks.update.mockRejectedValueOnce({ code: 'functions/aborted' });
+    await openVault(); await actions(note.name); fireEvent.click(screen.getByRole('button', { name: 'Edit note' }));
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'unsaved private draft' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Save change' }).closest('form')!); await flush();
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe('unsaved private draft');
+    expect(screen.getByRole('button', { name: 'Reload latest (keep draft)' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload latest (keep draft)' })); await flush();
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe('unsaved private draft');
+    fireEvent.keyDown(window, { key: 'l', ctrlKey: true, shiftKey: true }); await flush();
+    expect(screen.queryByDisplayValue('unsaved private draft')).toBeNull();
+  });
+  it('empty collection creation is durable before success is displayed', async () => {
+    await openVault(); fireEvent.click(screen.getByRole('button', { name: 'New collection' }));
+    fireEvent.change(screen.getByLabelText('Collection name'), { target: { value: 'Empty fictional home' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Create collection' }).closest('form')!); await flush();
+    expect(mocks.saveCatalog).toHaveBeenCalledWith(mocks.key, expect.anything(), expect.arrayContaining([expect.objectContaining({ name: 'Empty fictional home' })]));
+    expect(screen.getByText('Collection saved, including when empty.')).toBeTruthy();
+  });
+  it('partial permanent deletion stays visible, retryable and requires confirmation', async () => {
+    mocks.list.mockResolvedValue([{ ...file, trashed: true }]); mocks.remove.mockRejectedValueOnce(new Error('Fictional cleanup failed'));
+    await openVault(); fireEvent.click(screen.getByRole('button', { name: /^Trash/ })); await actions();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }));
+    expect(mocks.remove).not.toHaveBeenCalled();
+    const buttons = screen.getAllByRole('button', { name: 'Delete permanently' }); fireEvent.click(buttons[buttons.length - 1]); await flush();
+    expect(screen.getByRole('button', { name: `Preview ${file.name}` })).toBeTruthy();
+    expect(screen.getByText(/item remains visible until cleanup is confirmed/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete permanently' }).at(-1)!); await flush();
+    expect(screen.queryByRole('button', { name: `Preview ${file.name}` })).toBeNull();
+  });
+});
+describe('background focus and native credential UI', () => {
+  it('conceals a visible but blurred browser window and validates before showing it again', async () => {
+    await openVault()
+    fireEvent(window, new Event('blur'))
+    expect(document.documentElement.dataset.havenConcealed).toBe('true')
+    expect(document.getElementById('sensitive-surface')?.hasAttribute('inert')).toBe(true)
+    let finish!: () => void
+    mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+    fireEvent(window, new Event('focus'))
+    expect(document.documentElement.dataset.havenConcealed).toBe('true')
+    await act(async () => finish())
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined()
+    expect(screen.getByRole('button', { name: 'Lock vault' })).toBeTruthy()
+  })
+  it('focus without a previous background transition does not conceal or start an extra validation', async () => {
+    await openVault(); mocks.validate.mockClear()
+    fireEvent(window, new Event('focus'))
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined()
+    expect(mocks.validate).not.toHaveBeenCalled()
+  })
+  it('a repeated blur cannot restart the configured background deadline', async () => {
+    await openVault(); fireEvent(window, new Event('blur'))
+    act(() => vi.advanceTimersByTime(20000)); fireEvent(window, new Event('blur'))
+    act(() => vi.advanceTimersByTime(10000)); fireEvent(window, new Event('focus')); await flush()
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy()
+  })
+  it('ignores only focus changes belonging to native credential UI; actual hiding still conceals and locks', async () => {
+    const { runCredentialPrompt, clearCredentialPrompts } = await import('./lib/credentialPrompt')
+    await openVault()
+    let finish!: () => void
+    const pending = runCredentialPrompt(() => new Promise<void>(resolve => { finish = resolve }))
+    fireEvent(window, new Event('blur')); fireEvent(window, new Event('focus'))
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined()
+    hide(); expect(document.documentElement.dataset.havenConcealed).toBe('true')
+    act(() => vi.advanceTimersByTime(30000)); show(); await flush()
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy()
+    await act(async () => { finish(); await pending; clearCredentialPrompts() })
+  })
+})
+
+it('native credential UI does not suspend inactivity or authentication expiry', async () => {
+  const { runCredentialPrompt, clearCredentialPrompts } = await import('./lib/credentialPrompt')
+  localStorage.setItem('haven.security.v1', JSON.stringify({ backgroundSeconds: 30, inactivityMinutes: 1 }))
+  mocks.deadline = Date.now() + 70000
+  await openVault()
+  let finish!: () => void
+  const pending = runCredentialPrompt(() => new Promise<void>(resolve => { finish = resolve }))
+  fireEvent(window, new Event('blur'))
+  act(() => vi.advanceTimersByTime(60000))
+  expect(screen.getByLabelText('Your passphrase')).toBeTruthy()
+  act(() => vi.advanceTimersByTime(10000))
+  expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy()
+  await act(async () => { finish(); await pending; clearCredentialPrompts() })
+  expect(screen.queryByText(file.name)).toBeNull()
+})
+
+it('retains authenticated recovery drafts only within the configured grace and clears them on lock', async () => {
+  render(<App />); await authenticate()
+  const details = screen.getByText('Recover vault access or a forgotten passphrase').closest('details')!
+  details.open = true; fireEvent(details, new Event('toggle'))
+  fireEvent.change(screen.getByLabelText('Recovery kit file contents'), { target: { value: 'fictional recovery material' } })
+  hide()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', 'fictional recovery material')
+  act(() => vi.advanceTimersByTime(29000)); show(); await flush()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', 'fictional recovery material')
+  hide(); act(() => vi.advanceTimersByTime(30000)); show(); await flush()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
+  expect(mocks.signOut).not.toHaveBeenCalled()
 })
