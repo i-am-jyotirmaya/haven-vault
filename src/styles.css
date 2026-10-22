@@ -421,3 +421,11 @@ html[data-haven-concealed] .privacy-screen {
 .access-row { border-top: 1px solid #d8ded0; padding: 16px 0; }
 .access-row > strong, .access-row > span { display: block; margin-bottom: 6px; overflow-wrap: anywhere; }
 .recovery-confirm { border: 2px solid #a2b58c; border-radius: 12px; padding: 16px; margin: 16px 0; }
+
+.operation-panel { margin: 1rem 0; padding: 1rem; background: var(--surface, #fff); border: 1px solid #d9dfd4; border-radius: 14px; }
+.operation-row { display: flex; gap: .65rem; flex-wrap: wrap; align-items: center; border-top: 1px solid #e3e8df; padding: .7rem 0; }
+.operation-row > span:first-child { overflow-wrap: anywhere; flex: 1 1 12rem; }
+.operation-row [role="alert"] { flex-basis: 100%; }
+.operation-row progress { max-width: 100%; }
+.file-actions { flex-wrap: wrap; }
+.storage-summary p { overflow-wrap: anywhere; }

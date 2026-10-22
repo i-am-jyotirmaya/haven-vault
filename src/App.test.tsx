@@ -27,6 +27,7 @@ vi.mock('./lib/crypto', () => ({ unlockVault: mocks.unlock, createVault: mocks.c
 vi.mock('./lib/vault', () => ({
   getVaultConfig: mocks.getConfig, listVaultItems: mocks.list, downloadVaultFile: mocks.download,
   saveVaultConfig: mocks.saveConfig, saveVaultNote: mocks.saveNote,
+  reconcileOperations: vi.fn(async () => []), loadCollections: vi.fn(async () => ({ revision: 1, itemEpoch: 0, entries: [{ id: 'personal', name: 'Personal', legacyNames: ['Personal'] }, { id: 'secret', name: 'Secret collection', legacyNames: ['Secret collection'] }] })), fileCall: vi.fn(async () => ({ objectBytes: 39 })), saveCollections: vi.fn(), displayCollection: (item: unknown) => item,
   permanentlyDeleteVaultItem: vi.fn(), updateVaultItem: vi.fn(), uploadVaultFile: vi.fn(), MAX_FILE_SIZE: 50 * 1024 * 1024,
 }));
 import App from './App';

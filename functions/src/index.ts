@@ -1,3 +1,4 @@
+import { fileOperation } from './file-operations.js';
 import { createHash, randomBytes, createPublicKey, verify as verifySignature } from "node:crypto";
 import { getStorage } from "firebase-admin/storage";
 import { freshPasskey, canonical, validBox, validKeyRecord, keyTransition } from "./security-policy.js";
@@ -581,6 +582,7 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
   configured(request);
   const action = request.data?.action;
   if (typeof action !== 'string') throw new HttpsError('invalid-argument', 'Choose a security operation.');
+  if (action.startsWith('files.')) return fileOperation(request, requireRecent);
   await rateLimit(request, 'security', 120);
   if (['migrationItem', 'migrationFinalize'].includes(action)) return migrationOperation(request);
   return db.runTransaction(async transaction => {
@@ -660,6 +662,8 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
         transaction.set(db.doc(`_vaultAccess/${auth.uid}`), { generation: null, migrationGeneration: migration.record.generation, migrationPhase: migration.phase, migrationSessionId: auth.id });
         return { migration: { ...migration, sessionId: auth.id }, config: current };
       }
+      const pendingFiles = await transaction.get(db.collection(`users/${auth.uid}/operations`).where('status', 'in', ['pending', 'cancelling', 'deleting']).limit(1));
+      if (!pendingFiles.empty) throw new HttpsError('failed-precondition', 'Finish or cancel pending file operations before migration.');
       const next = request.data.record;
       validPublicRecovery(next);
       if (current?.version !== 1 || next.revision !== 1 || next.recovery !== null) throw new HttpsError('failed-precondition', 'Only unlocked legacy vaults can migrate.');

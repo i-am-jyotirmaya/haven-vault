@@ -33,8 +33,8 @@ service firebase.storage {
     }
     match /vaults/{uid}/{itemId} {
       allow get: if liveSession(uid);
-      allow delete: if liveSession(uid) && legacyWrites(uid);
-      allow create: if resource == null && liveSession(uid) && legacyWrites(uid)
+      allow delete: if false;
+      allow create: if false && resource == null && liveSession(uid) && legacyWrites(uid)
         && itemId.matches('^[A-Za-z0-9_-]{1,128}$')
         && request.resource.size >= 29
         && request.resource.size <= 50 * 1024 * 1024 + 29
@@ -44,12 +44,27 @@ service firebase.storage {
     }
     match /generations/{uid}/{generation}/{itemId} {
       allow get: if liveSession(uid) && readableGeneration(uid, generation);
-      allow create: if resource == null && liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation))
+      allow create: if resource == null && liveSession(uid) && staging(uid, generation)
         && itemId.matches('^[a-f0-9-]{36}$') && request.resource.size >= 29
         && request.resource.size <= 50 * 1024 * 1024 + 29
         && request.resource.contentType == 'application/octet-stream';
-      allow delete: if liveSession(uid) && activeGeneration(uid, generation);
+      allow delete: if false;
       allow update, list: if false;
+    }
+    function uploadReceipt(uid, generation, id) {
+      return generation == 'legacy'
+        ? firestore.get(/databases/(default)/documents/users/$(uid)/operations/$(id)).data
+        : firestore.get(/databases/(default)/documents/users/$(uid)/generations/$(generation)/operations/$(id)).data;
+    }
+    match /staged/{uid}/{generation}/{id} {
+      allow get: if liveSession(uid) && uploadReceipt(uid, generation, id).status in ['pending', 'completed'];
+      allow create: if resource == null && liveSession(uid)
+        && uploadReceipt(uid, generation, id).status == 'pending'
+        && uploadReceipt(uid, generation, id).kind == 'upload'
+        && request.resource.size == uploadReceipt(uid, generation, id).bytes
+        && request.resource.size >= 29 && request.resource.size <= 50 * 1024 * 1024 + 29
+        && request.resource.contentType == 'application/octet-stream';
+      allow update, delete, list: if false;
     }
     match /{allPaths=**} {
       allow read, write: if false;
