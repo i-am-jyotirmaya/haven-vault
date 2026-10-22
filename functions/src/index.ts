@@ -30,7 +30,7 @@ import {
 initializeApp();
 const db = getFirestore();
 const ownerEmail = defineString("OWNER_EMAIL", {
-  description: "The verified Google email allowed to enroll the first passkey.",
+  description: "The verified Google owner email for initial enrollment and kit-based recovery.",
 });
 const rpId = defineString("RP_ID", {
   description: "Exact production hostname (without scheme, slash, or port).",
@@ -561,7 +561,8 @@ async function requireRecent(transaction: Transaction, request: CallableRequest,
   return { uid: user.uid, id: id!, record };
 }
 async function sessionRecords(transaction: Transaction, uid: string) {
-  return transaction.get(sessions.where('uid', '==', uid).where('revoked', '==', false));
+  const snapshot = await transaction.get(sessions.where('uid', '==', uid).where('revoked', '==', false));
+  return { docs: snapshot.docs.filter(d => d.data().expiresAt?.toMillis() > Date.now()) };
 }
 function validPublicRecovery(record: any) {
   if (!validKeyRecord(record)) throw new HttpsError('invalid-argument', 'Unsupported key record.');
@@ -588,7 +589,10 @@ export const securityOperation = onCall({ ...callableOptions, timeoutSeconds: 12
     const current = (await transaction.get(configRef)).data();
     const migrationRef = migrationFor(auth.uid);
     const migration = (await transaction.get(migrationRef)).data();
-    if (action === 'migrationStatus') return { migration: migration || null, config: current || null };
+    if (action === 'migrationStatus') {
+      const receipts = migration ? await transaction.get(migrationRef.collection('receipts').select()) : null;
+      return { migration: migration || null, config: current || null, completed: receipts?.docs.map(d => d.id) || [] };
+    }
     if (action === 'list') {
       const owner = (await transaction.get(ownerRef)).data() as Owner;
       const creds = await Promise.all(owner.credentialIds.map(id => transaction.get(credentials.doc(digest(id)))));

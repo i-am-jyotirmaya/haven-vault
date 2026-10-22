@@ -14,11 +14,11 @@ async function run(name, test) {
   }
 }
 
-async function callable(name) {
+async function callable(name, data = {}) {
   const response = await fetch(`${endpoint}/${name}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: origin },
-    body: JSON.stringify({ data: {} }),
+    body: JSON.stringify({ data }),
     signal: AbortSignal.timeout(60000),
   });
   assert.match(response.headers.get('content-type') || '', /application\/json/, `${name}: infrastructure returned HTTP ${response.status} before the callable handler`);
@@ -53,6 +53,16 @@ async function callable(name) {
     }),
     run('Session inspection requires authenticated owner', async () => {
       const { response, body } = await callable('vaultSessionInfo');
+      assert.equal(response.status, 401);
+      assert.equal(body.error.status, 'UNAUTHENTICATED');
+    }),
+    ...['beginVaultRecovery', 'completeVaultRecovery'].map(name => run(`${name} requires owner verification`, async () => {
+      const { response, body } = await callable(name);
+      assert.equal(response.status, 401);
+      assert.equal(body.error.status, 'UNAUTHENTICATED');
+    })),
+    run('Private security management requires a vault session', async () => {
+      const { response, body } = await callable('securityOperation', { action: 'list' });
       assert.equal(response.status, 401);
       assert.equal(body.error.status, 'UNAUTHENTICATED');
     }),

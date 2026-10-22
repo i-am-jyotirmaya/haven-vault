@@ -324,3 +324,23 @@ describe('server timing and clock validation', () => {
     expect(deadline).toBeGreaterThan(wall);
   });
 });
+
+
+it('recovery token exchange uses request-start timing and cannot publish a late accepted token after sign-out', async () => {
+  let now = 10000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const session = await import('./firebase');
+  const started = session.beginRecoverySessionClock();
+  now += 120000;
+  await session.acceptRecoveredSession({ token: 'fixture', expiresAtMs: 3610000, serverNowMs: 10000, sessionDurationMinutes: 60 }, started);
+  expect(session.getVaultSessionDeadline()).toBe(3595000);
+  await session.signOutVault();
+  let finish!: () => void;
+  mocks.signIn.mockImplementation(() => new Promise(resolve => { finish = () => { mocks.auth.currentUser = mocks.user; resolve({ user: mocks.user }); }; }));
+  const pending = session.acceptRecoveredSession({ token: 'fixture', expiresAtMs: 3610000, serverNowMs: 10000, sessionDurationMinutes: 60 }, session.beginRecoverySessionClock());
+  const rejected = expect(pending).rejects.toThrow('cancelled');
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  await session.signOutVault(); finish(); await rejected;
+  expect(mocks.auth.currentUser).toBeNull();
+  expect(() => session.getVaultUserId()).toThrow();
+});

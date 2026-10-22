@@ -27,6 +27,10 @@ function validateLocalEnv(directory = root, environment = process.env) {
     if (fs.existsSync(file)) Object.assign(merged, parse(fs.readFileSync(file, 'utf8')));
   }
   for (const [key, value] of Object.entries(parse(localEnv))) {
+    if (key === 'AUTH_SESSION_MINUTES') {
+      if (!['15', '30', '60'].includes(environment[key] ?? merged[key] ?? '60')) throw new Error('Local AUTH_SESSION_MINUTES must be 15, 30, or 60.');
+      continue;
+    }
     if ((environment[key] ?? merged[key]) !== value) {
       throw new Error(`Local ${key} must equal ${value}. Check functions/.env.local and shell overrides.`);
     }

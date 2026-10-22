@@ -1,5 +1,5 @@
 // Repair invocation access after an initially failed Functions deployment.
-// Only these seven services receive the public transport permission. Handlers
+// Only these ten services receive the public transport permission. Handlers
 // still validate owner identity, passkey signatures, and expiring sessions.
 const { getGlobalDefaultAccount } = require('../functions/node_modules/firebase-tools/lib/auth');
 const { requireAuth } = require('../functions/node_modules/firebase-tools/lib/requireAuth');

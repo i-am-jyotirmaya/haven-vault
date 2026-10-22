@@ -4,7 +4,7 @@ import { getVaultConfig } from '../lib/vault'
 import { prepareRecoveredRecord, unlockRecovery, hashJson, type RecoveryKit } from '../lib/keys'
 import { RecoveryKitConfirmation } from './SecurityCenter'
 
-export default function Recovery({ authenticated, check, onComplete, onFailure }: { authenticated: boolean; check: () => void; onComplete: () => void; onFailure: (error: unknown) => void }) {
+export default function Recovery({ authenticated, check, onActive, onComplete, onFailure }: { authenticated: boolean; check: () => void; onActive: (active: boolean) => void; onComplete: () => void; onFailure: (error: unknown) => void }) {
   const [kitText, setKitText] = useState(''), [passphrase, setPassphrase] = useState(''), [confirm, setConfirm] = useState('')
   const [pending, setPending] = useState<{ old: RecoveryKit; next: RecoveryKit; ceremony: Awaited<ReturnType<typeof beginRecovery>> | null } | null>(null)
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('')
@@ -16,7 +16,7 @@ export default function Recovery({ authenticated, check, onComplete, onFailure }
     try { valid(); await work() } catch (error) { if (alive.current) { setMessage(error instanceof Error ? error.message : 'Recovery failed.'); onFailure(error) } }
     finally { if (alive.current) setBusy(false) }
   }
-  return <details className="security-center"><summary>Recover vault access or a forgotten passphrase</summary>
+  return <details className="security-center" onToggle={event => { if (event.currentTarget.open) onActive(true) }}><summary>Recover vault access or a forgotten passphrase</summary>
     <p>A recovery kit decrypts locally. If all passkeys are lost, fresh verification of the registered owner Google account is also required to enroll a replacement. Google alone cannot recover your vault. Without any usable unlock method or recovery material, recovery is impossible.</p>
     <p>Protect your kit: it grants powerful decryption and account recovery capability. Recovery replaces the kit and revokes other sessions. Lost-passkey recovery also retires every old passkey.</p>
     <label>Recovery kit file contents<textarea autoComplete="off" value={kitText} onChange={e => setKitText(e.target.value)} /></label>

@@ -21,5 +21,9 @@ test('local setup preserves existing files and rejects production overrides', ()
     assert.throws(() => validateLocalEnv(dir, {}), /EXPECTED_ORIGIN/);
     fs.unlinkSync(path.join(functions, '.env.local'));
     assert.throws(() => validateLocalEnv(dir, { RP_ID: 'production.web.app' }), /RP_ID/);
+    assert.doesNotThrow(() => validateLocalEnv(dir, { AUTH_SESSION_MINUTES: '30' }));
+    assert.throws(() => validateLocalEnv(dir, { AUTH_SESSION_MINUTES: '90' }), /AUTH_SESSION_MINUTES/);
+    fs.writeFileSync(file, first.replace('AUTH_SESSION_MINUTES=60\n', ''));
+    assert.doesNotThrow(() => validateLocalEnv(dir, {}));
   } finally { fs.rmSync(dir, { recursive: true }); }
 });

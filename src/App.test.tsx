@@ -528,3 +528,18 @@ it('trusted interaction inside timeout controls cannot restart elapsed inactivit
   fireEvent.change(control, { target: { value: '1' } });
   expect(screen.getByLabelText('Your passphrase')).toBeTruthy();
 });
+
+
+it('applies configured locking to recovery secrets before authentication and clears them on manual sign-out', async () => {
+  render(<App />)
+  const details = screen.getByText('Recover vault access or a forgotten passphrase').closest('details')!
+  details.open = true; fireEvent(details, new Event('toggle'))
+  fireEvent.change(screen.getByLabelText('Recovery kit file contents'), { target: { value: 'fictional recovery secret material' } })
+  hide(); act(() => vi.advanceTimersByTime(30_000)); show(); await flush()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
+  const again = screen.getByText('Recover vault access or a forgotten passphrase').closest('details')!
+  again.open = true; fireEvent(again, new Event('toggle'))
+  fireEvent.change(screen.getByLabelText('Recovery kit file contents'), { target: { value: 'another fictional kit' } })
+  hide(); fireEvent.click(screen.getByRole('button', { name: 'Sign out now' })); show(); await flush()
+  expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
+})

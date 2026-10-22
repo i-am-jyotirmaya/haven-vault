@@ -1,5 +1,5 @@
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
-import { callVault, acceptRecoveredSession, verifyRecoveryOwner } from './firebase'
+import { callVault, acceptRecoveredSession, beginRecoverySessionClock, verifyRecoveryOwner } from './firebase'
 import type { KeyRecord, RecoveryKit } from './keys'
 import { signRecovery } from './keys'
 export type AccessList = {
@@ -32,6 +32,7 @@ export async function finishRecovery(data: Awaited<ReturnType<typeof beginRecove
   check()
   const response = await startRegistration({ optionsJSON: data.options }); check()
   const signature = await signRecovery(oldKit, data.record, data.statement, response, next.record); check()
+  const startedAt = beginRecoverySessionClock()
   const result = await callVault<Parameters<typeof acceptRecoveredSession>[0]>('completeVaultRecovery', { challengeId: data.challengeId, response, signature, record: next.record }); check()
-  await acceptRecoveredSession(result); check()
+  await acceptRecoveredSession(result, startedAt); check()
 }

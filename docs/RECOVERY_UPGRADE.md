@@ -39,11 +39,12 @@ does not silently substitute a recovery method or imply that Google alone helps.
 
 Legacy vaults unlock with their original passphrase. Open **Security → Migrate or
 resume safely**, confirm that passphrase, and verify a passkey. Other devices
-cannot write while migration is in progress. The original config/metadata and
+cannot write while migration is in progress. If a server rate limit pauses a large vault, wait for the stated window and resume; verified receipts are reused, so retries progress instead of consuming the limit on old items again. The original config/metadata and
 original files stay intact; Admin-only encrypted file copies under `safeguards/`
 plus ciphertext receipts provide the rollback safeguard. New data is staged
-under `generations/`. The client decrypts and compares metadata and file bytes
-before recording each receipt. The server seals staging, verifies the manifest
+under `generations/`. Plan for roughly three copies of file ciphertext (original,
+safeguard and new generation); this release does not automatically reclaim them. The client decrypts and compares metadata and file bytes
+before recording each receipt. Server file safeguards are verified by streaming SHA-256 over the original and copied ciphertext. The server seals staging, verifies the manifest
 in batches and atomically switches the active config/authority. It never deletes
 originals. Object IDs, notes, thumbnails, collections, timestamps, favorites and
 trash state are preserved. Empty collections have always been local UI state,
@@ -107,7 +108,7 @@ registration; the recovery-authentication signature additionally binds the exact
 replacement credential response and replacement key record. The replacement
 passkey is cryptographically verified before old credentials/sessions are retired
 and the replacement key/recovery record is installed in the same transaction.
-A separate session is issued afterward. If the browser closes or the final
+A separate session is issued afterward. Opening recovery before sign-in activates the configured background/inactivity cleanup policy for its drafts and kit material; privacy-screen Lock and Sign out also clear it. If the browser closes or the final
 response is lost, sign in using the newly registered passkey and new passphrase
 or newly saved kit. Old passkeys remain revoked. A timeout before commit keeps
 the old recovery method valid; start again with fresh owner verification.
@@ -126,7 +127,7 @@ Sensitive mutations require passkey authentication within five minutes according
 to the server session record, not a client timestamp. Reauthentication does not
 renew absolute session expiry. Session device descriptions are coarse browser/OS
 families; creation, last validation and expiry are shown without full user agents
-or raw IPs. The current session is marked.
+or raw IPs. The current session is marked. New session issuance caps simultaneous unexpired sessions at 50; revoke unused sessions before reaching that ceiling.
 
 Revoked/expired private session records deny all subsequent server operations,
 even with refreshed Firebase ID tokens. Foreground clients validate every 30

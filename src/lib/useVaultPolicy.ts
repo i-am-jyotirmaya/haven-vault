@@ -116,7 +116,7 @@ export function useVaultPolicy(options: {
           if (model.unlocked) callbacks.current.lock('Session validation failed. Unlock after reconnecting.')
           callbacks.current.failure(error)
         }
-      } finally { polling = false; evaluate() }
+      } finally { polling = false; if (!disposed) evaluate() }
     }, 30_000)
     const events = ['keydown', 'pointerdown', 'pointermove', 'touchstart', 'touchmove', 'wheel']
     events.forEach(event => window.addEventListener(event, activity, { passive: true, capture: true }))

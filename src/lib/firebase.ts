@@ -317,10 +317,10 @@ export async function verifyRecoveryOwner() {
   await signInWithPopup(services.auth, provider)
   checkAuthenticationGeneration(generation)
 }
-export async function acceptRecoveredSession(result: TokenResponse) {
+export function beginRecoverySessionClock() { sessionNow = createSecurityClock(); return sessionNow() }
+export async function acceptRecoveredSession(result: TokenResponse, verificationStartedAt: number) {
   const generation = authenticationGeneration
-  sessionNow = createSecurityClock()
-  await acceptVaultToken(result, sessionNow())
+  await acceptVaultToken(result, verificationStartedAt)
   if (generation !== authenticationGeneration) {
     clearLocalSession()
     await signOut(requireServices().auth)

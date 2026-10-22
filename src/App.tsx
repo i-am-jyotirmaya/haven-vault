@@ -169,6 +169,7 @@ export default function App() {
   const [deleteItem, setDeleteItem] = useState<DisplayItem | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [recoveryActive, setRecoveryActive] = useState(false);
   const [enrollmentStep, setEnrollmentStep] = useState<"confirm" | "registering" | null>(null);
   const enrollmentAction = useRef<{ start: () => void; cancel: () => void } | null>(null);
   const [progress, setProgress] = useState("");
@@ -197,6 +198,7 @@ export default function App() {
   }, [toast]);
   const clearSensitiveState = useCallback(() => {
     generationRef.current++;
+    setRecoveryActive(false);
     clearPlaintext();
     setItems([]);
     setPreviewId(null);
@@ -239,7 +241,11 @@ export default function App() {
   }, [clearSensitiveState, transition, notify]);
   const lock = useCallback((message = "") => {
     // Locking invalidates encryption work only, never a passkey ceremony/session.
-    if (stateRef.current.status === "signed-out") return;
+    if (stateRef.current.status === "signed-out") {
+      clearSensitiveState();
+      if (message) notify("Recovery was cleared. Start again with your saved kit.");
+      return;
+    }
     clearSensitiveState();
     transition(lockVaultState(stateRef.current));
     if (message) notify(message);
@@ -258,7 +264,7 @@ export default function App() {
 
   const policy = useVaultPolicy({
     expiresAt: deadline,
-    unlocked: vaultState.status === "unlocked" || demo,
+    unlocked: vaultState.status === "unlocked" || demo || recoveryActive,
     authenticated: !!deadline,
     lock, expire: endSession,
     conceal: (background) => {
@@ -288,7 +294,7 @@ export default function App() {
     <strong>Haven is concealed</strong>
     <span>Checking your secure session before showing content.</span>
     <div className="privacy-actions">
-      <button className="button secondary" disabled={vaultState.status === "signed-out"} onClick={() => lock()}>Lock now</button>
+      <button className="button secondary" disabled={vaultState.status === "signed-out" && !recoveryActive} onClick={() => lock()}>Lock now</button>
       <button className="button secondary" onClick={() => endSession()}>Sign out now</button>
     </div>
   </div>, document.body);
@@ -918,7 +924,7 @@ export default function App() {
                 </button>
               </form>
             )}
-            <Recovery key={`recovery-${generationRef.current}`} authenticated={vaultState.status === 'locked'}
+            <Recovery key={`recovery-${generationRef.current}-${vaultState.status}`} authenticated={vaultState.status === 'locked'} onActive={setRecoveryActive}
               check={() => { if (recoveryGeneration !== generationRef.current || !canRevealContent()) throw new Error('Return to Haven to continue recovery.'); }}
               onFailure={handleVaultError} onComplete={() => endSession('Recovery complete. Sign in and unlock with your new passphrase.')} />
             {deadline > 0 && securitySettings}

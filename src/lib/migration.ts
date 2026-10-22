@@ -19,10 +19,11 @@ export async function migrateVault(passphrase: string, legacy: LegacyVaultConfig
   if (!db || !storage) throw new Error('Firebase is not configured.')
   const database = db, bucket = storage
   const oldKey = await unlockVault(passphrase, legacy); check()
-  const status = await securityCall<{ migration: MigrationState | null; config: unknown }>('migrationStatus'); check()
+  const status = await securityCall<{ migration: MigrationState | null; config: unknown; completed?: string[] }>('migrationStatus'); check()
   const prepared = status.migration ? null : await createKeyRecord(passphrase); check()
   const { migration } = await securityCall<{ migration: MigrationState }>('migrationBegin', { record: status.migration?.record || prepared!.config }); check()
   const key = await unlockKeyRecord(passphrase, migration.record); check()
+  const completed = new Set(status.completed || [])
   if (migration.phase === 'staging') {
     const originals = await getDocsFromServer(collection(database, 'users', uid, 'items')); check()
     for (const [index, source] of originals.docs.entries()) {
@@ -61,7 +62,7 @@ export async function migrateVault(passphrase: string, legacy: LegacyVaultConfig
         } finally { new Uint8Array(raw).fill(0) }
       }
       check()
-      await securityCall('migrationItem', { id: source.id, hasFile: value.kind !== 'note' }); check()
+      if (!completed.has(source.id)) { await securityCall('migrationItem', { id: source.id, hasFile: value.kind !== 'note' }); check() }
     }
   }
   progress('Verifying the manifest and finalizing the active generation…')

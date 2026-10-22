@@ -33,6 +33,8 @@ test('security product workflows against isolated emulators', { timeout: 240000 
   try {
     await admin.doc('_vaultAuth/owner').delete(); await clearLimits();
     await signInWithCredential(first.auth, ownerGoogle); uid = first.auth.currentUser.uid;
+    await admin.recursiveDelete(admin.doc(`users/${uid}`));
+    await admin.doc(`_vaultAccess/${uid}`).delete();
     const options = await first.call('registrationOptions'); userHandle = options.options.user.id;
     const issued = await first.call('verifyRegistration', { challengeId: options.challengeId, response: key1.registration(options.options.challenge) });
     await signInWithCustomToken(first.auth, issued.token);

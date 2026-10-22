@@ -196,6 +196,7 @@ export async function getVaultConfig(): Promise<VaultConfig | null> {
   const snapshot = await getDocFromServer(doc(requireDatabase(), 'users', uid, 'vault', 'config'))
   if (!snapshot.exists()) return null
   const config: unknown = snapshot.data()
+  if (isRecord(config) && ![1, 2].includes(Number(config.version))) throw new Error('Unsupported vault version. Update Haven to a compatible client; do not reset the configuration. Restore a compatible encrypted generation if needed.')
   if (isRecord(config) && config.version === 2) { validateKeyRecord(config as unknown as import("./keys").KeyRecord); return config as unknown as VaultConfig }
   if (
     !isRecord(config) ||

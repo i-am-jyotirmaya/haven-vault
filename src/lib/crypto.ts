@@ -84,7 +84,7 @@ function additionalData(key: CryptoKey, purpose: 'json' | 'file', context: strin
 
 function readPayload(payload: EncryptedPayload, maxCiphertextBytes = MAX_JSON_BYTES + TAG_BYTES, version = 1) {
   if (!payload || typeof payload !== 'object' || payload.version !== version) {
-    throw new Error('Unsupported encrypted data version.');
+    throw new Error('Unsupported encrypted data version. Update Haven or restore a compatible encrypted generation.');
   }
   const iv = fromBase64(payload.iv, IV_BYTES);
   const ciphertext = fromBase64(payload.ciphertext, maxCiphertextBytes);
@@ -240,7 +240,7 @@ export async function decryptFile(
     throw new Error('Invalid encrypted file size.');
   }
   const data = new Uint8Array(await blob.arrayBuffer());
-  if (data[0] !== (keyContext(key) ? 2 : 1)) throw new Error('Unsupported encrypted file version.');
+  if (data[0] !== (keyContext(key) ? 2 : 1)) throw new Error('Unsupported encrypted file version. Update Haven or restore a compatible encrypted generation.');
   return webCrypto().subtle.decrypt(
     {
       name: 'AES-GCM',
