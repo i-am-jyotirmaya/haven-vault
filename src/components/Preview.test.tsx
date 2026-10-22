@@ -7,6 +7,12 @@ import { demoItems } from '../demo';
 
 vi.mock('../lib/firebase', () => ({ isAuthenticationFailure: vi.fn(() => false) }));
 vi.mock('../lib/vault', () => ({ downloadVaultFile: vi.fn() }));
+// Keep component tests independent of .env.local: Firebase's Node Auth build
+// cannot initialize the browser popup resolver used by the application.
+vi.mock('../lib/firebase', () => ({
+  getVaultUserId: vi.fn(),
+  isAuthenticationFailure: vi.fn(),
+}));
 
 let host: HTMLDivElement;
 let root: Root;
