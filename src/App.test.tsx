@@ -27,7 +27,7 @@ vi.mock('./lib/crypto', () => ({ unlockVault: mocks.unlock, createVault: mocks.c
 vi.mock('./lib/vault', () => ({
   getVaultConfig: mocks.getConfig, listVaultItems: mocks.list, downloadVaultFile: mocks.download,
   saveVaultConfig: mocks.saveConfig, saveVaultNote: mocks.saveNote,
-  reconcileOperations: vi.fn(async () => []), loadCollections: vi.fn(async () => ({ revision: 1, itemEpoch: 0, entries: [{ id: 'personal', name: 'Personal', legacyNames: ['Personal'] }, { id: 'secret', name: 'Secret collection', legacyNames: ['Secret collection'] }] })), fileCall: vi.fn(async () => ({ objectBytes: 39 })), saveCollections: mocks.saveCatalog, displayCollection: (item: unknown) => item,
+  reconcileOperations: vi.fn(async () => []), loadCollections: vi.fn(async () => ({ revision: 1, itemEpoch: 0, entries: [{ id: 'personal', name: 'Personal', legacyNames: ['Personal'] }, { id: 'secret', name: 'Secret collection', legacyNames: ['Secret collection'] }] })), fileCall: vi.fn(async () => ({ objectBytes: 39 })), saveCollections: mocks.saveCatalog, displayCollection: (item: any, catalog: any) => { const c = catalog.entries.find((c: any) => c.id === item.collectionId || c.legacyNames.includes(item.collection)); return c ? { ...item, collectionId: c.id, collection: c.name } : item; },
   permanentlyDeleteVaultItem: mocks.remove, updateVaultItem: mocks.update, uploadVaultFile: vi.fn(), MAX_FILE_SIZE: 50 * 1024 * 1024,
 }));
 import App from './App';
@@ -668,3 +668,39 @@ it('retains authenticated recovery drafts only within the configured grace and c
   expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
   expect(mocks.signOut).not.toHaveBeenCalled()
 })
+
+
+describe('recoverable collection changes', () => {
+  async function manage() {
+    fireEvent.click(screen.getByRole('button', { name: /^Secret collection/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage collection' })); await flush();
+  }
+  it('reports per-item outcomes and retains a collection when one bulk move fails', async () => {
+    const second = { ...file, id: 'second-fictional', name: 'second fictional fixture' };
+    mocks.list.mockResolvedValueOnce([file, second]).mockResolvedValueOnce([file, second]).mockResolvedValue([{ ...file, collection: 'Personal' }, second]);
+    mocks.update.mockResolvedValueOnce(undefined).mockRejectedValueOnce({ code: 'functions/aborted' });
+    await openVault(); await manage();
+    fireEvent.click(screen.getByRole('button', { name: 'Move items and delete collection' })); await flush();
+    expect(mocks.saveCatalog).not.toHaveBeenCalled();
+    expect(screen.getByText(/second fictional fixture: move failed/)).toBeTruthy();
+    expect(screen.getByText(/Some moves failed. The collection is retained/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Secret collection/ })).toBeTruthy();
+  });
+  it('removes a collection only after its moved items remain available in the chosen destination', async () => {
+    mocks.list.mockResolvedValueOnce([file]).mockResolvedValueOnce([file]).mockResolvedValue([{ ...file, collection: 'Personal' }]);
+    await openVault(); await manage();
+    fireEvent.click(screen.getByRole('button', { name: 'Move items and delete collection' })); await flush();
+    expect(mocks.update).toHaveBeenCalledWith(mocks.key, expect.objectContaining({ collection: 'Personal' }));
+    expect(mocks.saveCatalog).toHaveBeenCalledWith(mocks.key, expect.anything(), [expect.objectContaining({ name: 'Personal' })]);
+    expect(screen.getByRole('button', { name: `Preview ${file.name}` })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Secret collection/ })).toBeNull();
+  });
+  it('renames a definition while preserving stable identity and legacy membership', async () => {
+    await openVault(); await manage();
+    fireEvent.change(screen.getByLabelText('Collection name'), { target: { value: 'Renamed collection' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save collection name' })); await flush();
+    expect(mocks.saveCatalog).toHaveBeenCalledWith(mocks.key, expect.anything(), expect.arrayContaining([expect.objectContaining({ id: 'secret', name: 'Renamed collection' })]));
+    expect(screen.getByRole('button', { name: /^Renamed collection/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: `Preview ${file.name}` })).toBeTruthy();
+  });
+});

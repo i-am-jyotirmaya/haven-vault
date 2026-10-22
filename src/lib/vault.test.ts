@@ -137,3 +137,13 @@ it('discards a crypto result completed after lock and clears the original transi
     expect(state.calls.some(c => c.action === 'files.begin')).toBe(false)
   } finally { release(); spy.mockRestore() }
 })
+
+it('deletes an independently persisted empty collection without deleting any item or file', async () => {
+  const initial = await loadCollections(key), id = crypto.randomUUID()
+  const added = await saveCollections(key, initial, [...initial.entries, { id, name: 'Empty deletion fixture', legacyNames: [] }])
+  const before = state.calls.filter(c => c.action === 'files.begin').length
+  await saveCollections(key, added, added.entries.filter(c => c.id !== id))
+  expect((await loadCollections(key)).entries.some(c => c.id === id)).toBe(false)
+  expect(state.calls.filter(c => c.action === 'files.begin')).toHaveLength(before)
+  expect(state.objects.size).toBe(0)
+})

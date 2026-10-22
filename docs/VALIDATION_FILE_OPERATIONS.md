@@ -7,7 +7,7 @@ native credential/privacy follow-ups.
 
 ## Executed checks
 
-- Configured frontend/backend-handler unit and UI tests: **209 tests / 15
+- Configured frontend/backend-handler unit and UI tests: **213 tests / 15
   suites**, using Node **22.23.0**, all six fictional Firebase configuration
   values and `VITE_VAULT_BACKEND_READY=true`.
 - Compiled backend policy tests: **10 passed**.
@@ -45,7 +45,7 @@ transactions. Neither is evidence of physical-device platform behavior.
 | Private revision history | Completed journal payloads are redacted; active item ciphertext supplies idempotent retry reads |
 | Wrong owner / expired or revoked private session | Real callable and Storage rejection; refreshed Firebase token does not restore access |
 | Concurrent note/item writes | Two edits from one revision, exactly one successful finalization; direct Firestore CAS bypass denied |
-| Collection races | Stale catalog revisions and an interleaved item-epoch write reject removal |
+| Collection races | Stale catalog revisions and an interleaved item-epoch write reject removal; UI fault tests retain the source after one failed move and verify successful deletion preserves destination items |
 | Empty collections, aliases, rename | Encrypted catalog reload, stable IDs and legacy-name aliases tested without rewriting files |
 | Interrupted key migration | Read-only legacy unlock remains possible, source writes blocked; empty definitions and operation-staged files migrate and read back; already completed cutover retries safely |
 | Size/quota failures | Concurrent oversized begin requests rejected by backend; Storage size/type/receipt rules; injected provider quota failure cannot produce a completed item |

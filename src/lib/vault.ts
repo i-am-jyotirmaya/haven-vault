@@ -328,7 +328,7 @@ async function writeItem(key: CryptoKey, draft: VaultItem, kind: 'write' | 'dele
   let prepared = pending.get(identity)
   if (prepared && prepared.signature !== signature) throw new Error('A previous change is unconfirmed. Reload and reconcile it before changing this draft.')
   if (!prepared) {
-    prepared = { signature, id: draft.deleting || (draft.revision ? crypto.randomUUID() : draft.id), item: draft, payload: await encryptMetadata(key, draft), catalogRevision: catalogs.get(key)?.revision || 0 }; check()
+    prepared = { signature, id: draft.deleting || (draft.revision ? crypto.randomUUID() : draft.id), item: { ...draft }, payload: await encryptMetadata(key, draft), catalogRevision: catalogs.get(key)?.revision || 0 }; check()
     pending.set(identity, prepared)
   }
   check()
