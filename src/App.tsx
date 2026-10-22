@@ -274,6 +274,7 @@ export default function App() {
       if (background && stateRef.current.status === "locked") clearSensitiveState();
     },
     validate: async () => {
+      if (stateRef.current.status !== "locked" && stateRef.current.status !== "unlocked") return;
       const current = authenticationGeneration.current;
       await validateVaultSession();
       if (current !== authenticationGeneration.current) return;
@@ -292,7 +293,7 @@ export default function App() {
   const recoveryGeneration = generationRef.current;
   const privacyScreen = createPortal(<div className="privacy-screen" role="status" aria-live="polite" aria-hidden={!policy.concealed}>
     <strong>Haven is concealed</strong>
-    <span>Checking your secure session before showing content.</span>
+    <span>Your content is hidden while Haven is inactive. Return here to continue.</span>
     <div className="privacy-actions">
       <button className="button secondary" disabled={vaultState.status === "signed-out" && !recoveryActive} onClick={() => lock()}>Lock now</button>
       <button className="button secondary" onClick={() => endSession()}>Sign out now</button>
@@ -734,7 +735,7 @@ export default function App() {
 
   if (screen !== "vault")
     return (
-      <div className="auth-layout">
+      <div id="sensitive-surface" className="auth-layout" inert={policy.concealed || undefined}>
         {privacyScreen}
         {policy.warning && <SessionWarning />}
         <aside className="auth-story">
@@ -976,7 +977,7 @@ export default function App() {
   );
 
   return (
-    <div className="app-shell">
+    <div id="sensitive-surface" className="app-shell" inert={policy.concealed || undefined}>
       {privacyScreen}
       {policy.warning && <SessionWarning />}
       {mobileNav && <div className="nav-overlay" onClick={() => setMobileNav(false)} />}

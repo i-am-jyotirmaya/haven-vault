@@ -543,3 +543,59 @@ it('applies configured locking to recovery secrets before authentication and cle
   hide(); fireEvent.click(screen.getByRole('button', { name: 'Sign out now' })); show(); await flush()
   expect(screen.getByLabelText('Recovery kit file contents')).toHaveProperty('value', '')
 })
+
+describe('background focus and native credential UI', () => {
+  it('conceals a visible but blurred browser window and validates before showing it again', async () => {
+    await openVault()
+    fireEvent(window, new Event('blur'))
+    expect(document.documentElement.dataset.havenConcealed).toBe('true')
+    expect(document.getElementById('sensitive-surface')?.hasAttribute('inert')).toBe(true)
+    let finish!: () => void
+    mocks.validate.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+    fireEvent(window, new Event('focus'))
+    expect(document.documentElement.dataset.havenConcealed).toBe('true')
+    await act(async () => finish())
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined()
+    expect(screen.getByRole('button', { name: 'Lock vault' })).toBeTruthy()
+  })
+  it('focus without a previous background transition does not conceal or start an extra validation', async () => {
+    await openVault(); mocks.validate.mockClear()
+    fireEvent(window, new Event('focus'))
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined()
+    expect(mocks.validate).not.toHaveBeenCalled()
+  })
+  it('a repeated blur cannot restart the configured background deadline', async () => {
+    await openVault(); fireEvent(window, new Event('blur'))
+    act(() => vi.advanceTimersByTime(20000)); fireEvent(window, new Event('blur'))
+    act(() => vi.advanceTimersByTime(10000)); fireEvent(window, new Event('focus')); await flush()
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy()
+  })
+  it('ignores only focus changes belonging to native credential UI; actual hiding still conceals and locks', async () => {
+    const { runCredentialPrompt, clearCredentialPrompts } = await import('./lib/credentialPrompt')
+    await openVault()
+    let finish!: () => void
+    const pending = runCredentialPrompt(() => new Promise<void>(resolve => { finish = resolve }))
+    fireEvent(window, new Event('blur')); fireEvent(window, new Event('focus'))
+    expect(document.documentElement.dataset.havenConcealed).toBeUndefined()
+    hide(); expect(document.documentElement.dataset.havenConcealed).toBe('true')
+    act(() => vi.advanceTimersByTime(30000)); show(); await flush()
+    expect(screen.getByLabelText('Your passphrase')).toBeTruthy()
+    await act(async () => { finish(); await pending; clearCredentialPrompts() })
+  })
+})
+
+it('native credential UI does not suspend inactivity or authentication expiry', async () => {
+  const { runCredentialPrompt, clearCredentialPrompts } = await import('./lib/credentialPrompt')
+  localStorage.setItem('haven.security.v1', JSON.stringify({ backgroundSeconds: 30, inactivityMinutes: 1 }))
+  mocks.deadline = Date.now() + 70000
+  await openVault()
+  let finish!: () => void
+  const pending = runCredentialPrompt(() => new Promise<void>(resolve => { finish = resolve }))
+  fireEvent(window, new Event('blur'))
+  act(() => vi.advanceTimersByTime(60000))
+  expect(screen.getByLabelText('Your passphrase')).toBeTruthy()
+  act(() => vi.advanceTimersByTime(10000))
+  expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy()
+  await act(async () => { finish(); await pending; clearCredentialPrompts() })
+  expect(screen.queryByText(file.name)).toBeNull()
+})

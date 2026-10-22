@@ -9,7 +9,8 @@ export default function Recovery({ authenticated, check, onActive, onComplete, o
   const [pending, setPending] = useState<{ old: RecoveryKit; next: RecoveryKit; ceremony: Awaited<ReturnType<typeof beginRecovery>> | null } | null>(null)
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const alive = useRef(true)
-  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  const cancel = useRef(new AbortController())
+  useEffect(() => { alive.current = true; cancel.current = new AbortController(); return () => { alive.current = false; cancel.current.abort() } }, [])
   const valid = () => { if (!alive.current) throw new Error('Recovery cancelled.'); check() }
   const run = async (work: () => Promise<void>) => {
     if (busy) return; setBusy(true); setMessage('')
@@ -26,7 +27,7 @@ export default function Recovery({ authenticated, check, onActive, onComplete, o
       if (passphrase !== confirm) throw new Error('The passphrases must match.')
       const old = JSON.parse(kitText) as RecoveryKit, nextPassphrase = passphrase
       setKitText(''); setPassphrase(''); setConfirm('')
-      if (authenticated) await reauthenticate()
+      if (authenticated) await reauthenticate(cancel.current.signal)
       const ceremony = authenticated ? null : await beginRecovery(); valid()
       const record = ceremony?.record || await getVaultConfig(); valid()
       if (record?.version !== 2) throw new Error('This vault has no compatible recovery method.')
@@ -35,8 +36,8 @@ export default function Recovery({ authenticated, check, onActive, onComplete, o
     })}>{authenticated ? 'Recover with kit and existing passkey' : 'Verify owner and prepare recovery'}</button>
     {pending && <RecoveryKitConfirmation kit={pending.next} busy={busy} onCancel={() => setPending(null)} onConfirm={() => void run(async () => {
       const saved = pending
-      if (saved.ceremony) await finishRecovery(saved.ceremony, saved.old, saved.next, valid)
-      else { await reauthenticate(); valid(); await securityCall('replaceKeys', { purpose: 'recover', record: saved.next.record }) }
+      if (saved.ceremony) await finishRecovery(saved.ceremony, saved.old, saved.next, valid, cancel.current.signal)
+      else { await reauthenticate(cancel.current.signal); valid(); await securityCall('replaceKeys', { purpose: 'recover', record: saved.next.record }) }
       valid()
       const result = await getVaultConfig(); valid()
       if (await hashJson(result) !== await hashJson(saved.next.record)) throw new Error('Recovery may have committed. Sign in with the replacement passkey and use the new passphrase or saved replacement kit.')
