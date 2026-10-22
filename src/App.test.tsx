@@ -22,6 +22,7 @@ vi.mock('./lib/firebase', () => ({
   },
   isAuthenticationFailure: (err: { code?: string }) => ['unauthenticated', 'functions/permission-denied', 'permission-denied'].includes(err?.code || ''),
 }));
+vi.mock('./lib/keys', async original => ({ ...await original<typeof import('./lib/keys')>(), createKeyRecord: mocks.create }));
 vi.mock('./lib/crypto', () => ({ unlockVault: mocks.unlock, createVault: mocks.create }));
 vi.mock('./lib/vault', () => ({
   getVaultConfig: mocks.getConfig, listVaultItems: mocks.list, downloadVaultFile: mocks.download,

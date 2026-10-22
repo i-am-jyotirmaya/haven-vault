@@ -8,13 +8,13 @@ import {
   encryptJson,
   unlockVault,
   type EncryptedPayload,
-  type VaultConfig,
+  type LegacyVaultConfig,
 } from './crypto';
 
 const PASSPHRASE = 'orchard cabin sunrise river';
 const CONTEXT = 'owner:7ea07b6a-6351-4dc8-8ac9-62f424c632ba';
 let key: CryptoKey;
-let config: VaultConfig;
+let config: LegacyVaultConfig;
 
 beforeAll(async () => {
   ({ key, config } = await createVault(PASSPHRASE));
@@ -72,9 +72,9 @@ describe('vault key derivation', () => {
     await expect(unlockVault(PASSPHRASE, { ...config, salt: '*' })).rejects.toThrow(
       'Invalid encrypted data encoding',
     );
-    await expect(unlockVault(PASSPHRASE, null as unknown as VaultConfig)).rejects.toThrow();
+    await expect(unlockVault(PASSPHRASE, null as unknown as LegacyVaultConfig)).rejects.toThrow();
     await expect(
-      unlockVault(PASSPHRASE, { ...config, version: 2 } as unknown as VaultConfig),
+      unlockVault(PASSPHRASE, { ...config, version: 99 } as unknown as LegacyVaultConfig),
     ).rejects.toThrow('Unsupported vault configuration');
   });
 });

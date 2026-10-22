@@ -1,16 +1,19 @@
+import { keyContext, unlockKeyRecord, type KeyRecord } from './keys';
 /** Browser-only encryption. Passphrases and keys must never be persisted or sent to Firebase. */
 export type EncryptedPayload = {
-  version: 1;
+  version: 1 | 2;
   iv: string;
   ciphertext: string;
 };
 
-export type VaultConfig = {
+export type LegacyVaultConfig = {
   version: 1;
   salt: string;
   iterations: number;
   verifier: EncryptedPayload;
 };
+
+export type VaultConfig = LegacyVaultConfig | KeyRecord;
 
 const VERSION = 1;
 const ITERATIONS = 600_000;
@@ -68,17 +71,19 @@ function assertPassphrase(passphrase: string): void {
   }
 }
 
-function additionalData(purpose: 'json' | 'file', context: string): Uint8Array<ArrayBuffer> {
+function additionalData(key: CryptoKey, purpose: 'json' | 'file', context: string): Uint8Array<ArrayBuffer> {
   if (typeof context !== 'string' || context.length === 0 || context.length > 1024) {
     throw new Error('A valid encryption context is required.');
   }
   // Purpose separation prevents a metadata ciphertext being accepted as a file.
   // Callers bind context to the owner and item ID, so items cannot be swapped.
+  const binding = keyContext(key);
+  if (binding) return encoder.encode(JSON.stringify(['haven', 2, binding.vaultId, binding.generation, purpose, context]));
   return encoder.encode(`personal-vault:${VERSION}:${purpose}:${context}`);
 }
 
-function readPayload(payload: EncryptedPayload, maxCiphertextBytes = MAX_JSON_BYTES + TAG_BYTES) {
-  if (!payload || typeof payload !== 'object' || payload.version !== VERSION) {
+function readPayload(payload: EncryptedPayload, maxCiphertextBytes = MAX_JSON_BYTES + TAG_BYTES, version = 1) {
+  if (!payload || typeof payload !== 'object' || payload.version !== version) {
     throw new Error('Unsupported encrypted data version.');
   }
   const iv = fromBase64(payload.iv, IV_BYTES);
@@ -120,7 +125,7 @@ async function deriveKey(
 
 export async function createVault(
   passphrase: string,
-): Promise<{ key: CryptoKey; config: VaultConfig }> {
+): Promise<{ key: CryptoKey; config: LegacyVaultConfig }> {
   assertPassphrase(passphrase);
   const salt = webCrypto().getRandomValues(new Uint8Array(SALT_BYTES));
   const key = await deriveKey(passphrase, salt, ITERATIONS);
@@ -132,6 +137,7 @@ export async function createVault(
 }
 
 export async function unlockVault(passphrase: string, config: VaultConfig): Promise<CryptoKey> {
+  if (config?.version === 2) return unlockKeyRecord(passphrase, config);
   if (
     !config ||
     typeof config !== 'object' ||
@@ -161,7 +167,7 @@ export async function encryptJson(
   value: unknown,
   context: string,
 ): Promise<EncryptedPayload> {
-  const aad = additionalData('json', context);
+  const aad = additionalData(key, 'json', context);
   const json = JSON.stringify(value);
   if (json === undefined) throw new Error('The value cannot be encrypted as JSON.');
   const plaintext = encoder.encode(json);
@@ -174,7 +180,7 @@ export async function encryptJson(
       key,
       plaintext,
     );
-    return { version: VERSION, iv: toBase64(iv), ciphertext: toBase64(new Uint8Array(ciphertext)) };
+    return { version: keyContext(key) ? 2 : 1, iv: toBase64(iv), ciphertext: toBase64(new Uint8Array(ciphertext)) };
   } finally {
     plaintext.fill(0);
   }
@@ -185,9 +191,9 @@ export async function decryptJson<T>(
   payload: EncryptedPayload,
   context: string,
 ): Promise<T> {
-  const { iv, ciphertext } = readPayload(payload);
+  const { iv, ciphertext } = readPayload(payload, MAX_JSON_BYTES + TAG_BYTES, keyContext(key) ? 2 : 1);
   const plaintext = await webCrypto().subtle.decrypt(
-    { name: 'AES-GCM', iv, additionalData: additionalData('json', context), tagLength: 128 },
+    { name: 'AES-GCM', iv, additionalData: additionalData(key, 'json', context), tagLength: 128 },
     key,
     ciphertext,
   );
@@ -211,11 +217,11 @@ export async function encryptFile(
   const crypto = webCrypto();
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: additionalData('file', context), tagLength: 128 },
+    { name: 'AES-GCM', iv, additionalData: additionalData(key, 'file', context), tagLength: 128 },
     key,
     bytes,
   );
-  return new Blob([new Uint8Array([VERSION]), iv, ciphertext], {
+  return new Blob([new Uint8Array([keyContext(key) ? 2 : 1]), iv, ciphertext], {
     type: 'application/octet-stream',
   });
 }
@@ -234,12 +240,12 @@ export async function decryptFile(
     throw new Error('Invalid encrypted file size.');
   }
   const data = new Uint8Array(await blob.arrayBuffer());
-  if (data[0] !== VERSION) throw new Error('Unsupported encrypted file version.');
+  if (data[0] !== (keyContext(key) ? 2 : 1)) throw new Error('Unsupported encrypted file version.');
   return webCrypto().subtle.decrypt(
     {
       name: 'AES-GCM',
       iv: data.subarray(1, headerLength),
-      additionalData: additionalData('file', context),
+      additionalData: additionalData(key, 'file', context),
       tagLength: 128,
     },
     key,

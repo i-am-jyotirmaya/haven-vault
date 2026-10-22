@@ -8,6 +8,7 @@ const { project, region } = require('./config.cjs').loadConfig();
 const apply = process.argv.includes('--apply');
 const services = [
   'vaultsessioninfo', 'registrationoptions', 'verifyregistration',
+  'securityoperation', 'beginvaultrecovery', 'completevaultrecovery',
   'authenticationoptions', 'verifyauthentication', 'endvaultsession', 'validatevaultsession',
 ];
 let current = 'authenticate';

@@ -300,3 +300,30 @@ export function getVaultUserId(): string {
   }
   return activeVaultUid
 }
+
+/** Callables share in-memory Firebase auth; no encryption secrets are arguments. */
+export async function callVault<T>(name: string, data: Record<string, unknown>): Promise<T> {
+  const services = requireServices()
+  const generation = authenticationGeneration
+  const result = await httpsCallable<Record<string, unknown>, T>(services.functions, name, { timeout: 120000 })(data)
+  checkAuthenticationGeneration(generation)
+  return result.data
+}
+export async function verifyRecoveryOwner() {
+  const services = requireServices()
+  const generation = authenticationGeneration
+  const provider = new GoogleAuthProvider()
+  provider.setCustomParameters({ prompt: 'select_account' })
+  await signInWithPopup(services.auth, provider)
+  checkAuthenticationGeneration(generation)
+}
+export async function acceptRecoveredSession(result: TokenResponse) {
+  const generation = authenticationGeneration
+  sessionNow = createSecurityClock()
+  await acceptVaultToken(result, sessionNow())
+  if (generation !== authenticationGeneration) {
+    clearLocalSession()
+    await signOut(requireServices().auth)
+    throw new Error('Recovery was cancelled. Sign in with the replacement passkey.')
+  }
+}

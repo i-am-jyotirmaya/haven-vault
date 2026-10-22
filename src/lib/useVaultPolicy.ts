@@ -105,6 +105,19 @@ export function useVaultPolicy(options: {
       // Reject overdue access before allowing this interaction to move inactivity.
       if (evaluate() && event.isTrusted && !editingPolicy) model.activity()
     }
+    let polling = false
+    const poll = setInterval(async () => {
+      if (disposed || polling || !callbacks.current.authenticated || document.visibilityState !== 'visible' || checking) return
+      polling = true
+      const generation = resumeGeneration
+      try { await callbacks.current.validate() }
+      catch (error) {
+        if (!disposed && generation === resumeGeneration) {
+          if (model.unlocked) callbacks.current.lock('Session validation failed. Unlock after reconnecting.')
+          callbacks.current.failure(error)
+        }
+      } finally { polling = false; evaluate() }
+    }, 30_000)
     const events = ['keydown', 'pointerdown', 'pointermove', 'touchstart', 'touchmove', 'wheel']
     events.forEach(event => window.addEventListener(event, activity, { passive: true, capture: true }))
     document.addEventListener('visibilitychange', visibility)
@@ -119,6 +132,7 @@ export function useVaultPolicy(options: {
       disposed = true
       ++resumeGeneration
       clearTimeout(timer)
+      clearInterval(poll)
       scheduler.current = () => {}
       events.forEach(event => window.removeEventListener(event, activity, true))
       document.removeEventListener('visibilitychange', visibility)

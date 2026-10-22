@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import Preview from './Preview';
 import { demoItems } from '../demo';
 
+vi.mock('../lib/firebase', () => ({ isAuthenticationFailure: vi.fn(() => false) }));
 vi.mock('../lib/vault', () => ({ downloadVaultFile: vi.fn() }));
 
 let host: HTMLDivElement;

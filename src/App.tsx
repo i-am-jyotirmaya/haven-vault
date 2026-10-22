@@ -51,7 +51,7 @@ import {
   Circle,
 } from "lucide-react";
 import { demoItems, formatBytes, type DisplayItem } from "./demo";
-import { createVault, unlockVault, type VaultConfig } from "./lib/crypto";
+import { unlockVault, type VaultConfig } from "./lib/crypto";
 import {
   enrollPasskey,
   isFirebaseConfigured,
@@ -79,6 +79,9 @@ import {
 import { lockVaultState, sessionDeadline, type VaultState } from "./lib/vaultState";
 import { clearPlaintext, createPlaintextUrl, revokePlaintextUrl } from "./lib/plaintext";
 import { useVaultPolicy } from "./lib/useVaultPolicy";
+import { createKeyRecord } from './lib/keys';
+import SecurityCenter from './components/SecurityCenter';
+import Recovery from './components/Recovery';
 import SecuritySettings from "./components/SecuritySettings";
 import Modal from "./components/Modal";
 import Preview from "./components/Preview";
@@ -280,6 +283,7 @@ export default function App() {
   [policy.evaluate]);
   const canUseVault = () => canRevealContent() &&
     (stateRef.current.status === "unlocked" || stateRef.current.status === "demo");
+  const recoveryGeneration = generationRef.current;
   const privacyScreen = createPortal(<div className="privacy-screen" role="status" aria-live="polite" aria-hidden={!policy.concealed}>
     <strong>Haven is concealed</strong>
     <span>Checking your secure session before showing content.</span>
@@ -451,7 +455,7 @@ export default function App() {
       let key: CryptoKey;
       let encryptionConfig: VaultConfig;
       if (config === null) {
-        const created = await createVault(secret);
+        const created = await createKeyRecord(secret);
         if (!workIsCurrent(current, false)) return;
         await saveVaultConfig(created.config);
         key = created.key;
@@ -611,7 +615,7 @@ export default function App() {
     const current = generationRef.current;
     setBusy(true);
     try {
-      if (!demo) await permanentlyDeleteVaultItem(deleteItem);
+      if (!demo) await permanentlyDeleteVaultItem(deleteItem, vaultKey!);
       if (!workIsCurrent(current)) return;
       setItems((values) => values.filter((item) => item.id !== deleteItem.id));
       setDeleteItem(null);
@@ -914,6 +918,9 @@ export default function App() {
                 </button>
               </form>
             )}
+            <Recovery key={`recovery-${generationRef.current}`} authenticated={vaultState.status === 'locked'}
+              check={() => { if (recoveryGeneration !== generationRef.current || !canRevealContent()) throw new Error('Return to Haven to continue recovery.'); }}
+              onFailure={handleVaultError} onComplete={() => endSession('Recovery complete. Sign in and unlock with your new passphrase.')} />
             {deadline > 0 && securitySettings}
             <div className="auth-reassurance">
               <LockKeyhole size={13} /> Your passphrase is never stored or shared.
@@ -1129,11 +1136,16 @@ export default function App() {
                   icon={<KeyRound />}
                   step="02"
                   title="Your passphrase holds the key"
-                  text="AES-256-GCM encryption protects your files, filenames, and notes. Only your passphrase can derive the key that decrypts them."
+                  text="AES-256-GCM encryption protects your files, filenames, and notes. Your passphrase or configured recovery kit unlocks the local master key."
                   status={demo ? "Preview · sample data" : "Vault decrypted in memory"}
                 />
               </section>
               {securitySettings}
+              {!demo && vaultState.status === 'unlocked' && <SecurityCenter config={vaultState.config} vaultKey={vaultState.key}
+                check={() => { if (!canUseVault()) throw new Error('Unlock the vault to continue.'); }}
+                onFailure={handleVaultError} onEndSession={() => endSession('This session was revoked.')}
+                onChanged={(config, key) => { const state = stateRef.current; if (state.status === 'unlocked') transition({ ...state, config, key }); }} />}
+
               <div className="security-details">
                 <h2>The little details that keep you safe</h2>
                 {[
@@ -1157,9 +1169,9 @@ export default function App() {
                   },
                   {
                     icon: <KeyRound />,
-                    title: "No passphrase recovery",
+                    title: "Recovery must be configured",
                     description:
-                      "Keep a strong passphrase somewhere safe. Haven cannot reset it to recover your files.",
+                      "Configure and protect a recovery kit. Without a usable passphrase or kit, content recovery is impossible.",
                   },
                 ].map((detail) => (
                   <div className="security-detail" key={detail.title}>

@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('firebase-admin/app', () => ({ initializeApp: vi.fn() }))
 vi.mock('firebase-admin/auth', () => ({ getAuth: () => ({ createCustomToken: mocks.sign }) }))
 vi.mock('firebase-admin/firestore', () => {
-  const snapshot = (path: string) => ({ data: () => mocks.records.get(path) })
+  const snapshot = (path: string): any => ({ id: path.split('/').at(-1), ref: ref(path), exists: mocks.records.has(path), data: () => mocks.records.get(path) })
   const ref = (path: string) => ({
     path, get: async () => snapshot(path),
     create: async (data: Record<string, unknown>) => { mocks.records.set(path, data) },
@@ -17,9 +17,10 @@ vi.mock('firebase-admin/firestore', () => {
   return {
     Timestamp: { now: () => ({ toMillis: () => Date.now() }), fromMillis: (ms: number) => ({ toMillis: () => ms }) },
     getFirestore: () => ({
-      doc: ref, collection: (path: string) => ({ doc: (id: string) => ref(`${path}/${id}`) }),
+      doc: ref, collection: (path: string) => ({ doc: (id: string) => ref(`${path}/${id}`), where: () => ({ where: () => ({ query: path }) }) }),
       runTransaction: (fn: (tx: unknown) => unknown) => fn({
-        get: async (r: { path: string }) => snapshot(r.path),
+        get: async (r: { path: string; query?: string }) => r.query ? ({ docs: [...mocks.records.keys()].filter(p => p.startsWith(r.query + '/') && mocks.records.get(p)?.revoked === false).map(snapshot) }) : snapshot(r.path),
+        create: (r: { path: string }, data: Record<string, unknown>) => mocks.records.set(r.path, data),
         set: (r: { path: string }, data: Record<string, unknown>) => mocks.records.set(r.path, data),
         update: (r: { path: string }, data: Record<string, unknown>) => mocks.records.set(r.path, { ...mocks.records.get(r.path), ...data }),
         delete: (r: { path: string }) => mocks.records.delete(r.path),
