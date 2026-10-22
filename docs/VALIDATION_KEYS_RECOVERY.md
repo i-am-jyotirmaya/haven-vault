@@ -113,3 +113,9 @@ Primary platform references consulted:
 No backend cryptographic format, authorization rule, deployed infrastructure or
 real-vault data was changed by this follow-up. Main's merged #5 test-isolation
 changes are integrated, preserving the full emulator CI step.
+
+Follow-up final checks: the configured Node 22 unit/UI suite passes, including
+an interrupted recovery acknowledgement that must not later be described as an
+unchanged cancellation. Recovery kit IDs are visible in Security so the saved
+file can be compared after an unconfirmed save. Backend policy/configuration
+checks, TypeScript and the production build pass. No deployment was performed.

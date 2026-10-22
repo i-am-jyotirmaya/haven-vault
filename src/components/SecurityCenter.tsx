@@ -41,6 +41,7 @@ export default function SecurityCenter({ config, vaultKey, check, onChanged, onE
   const [notices, setNotices] = useState<Partial<Record<Scope, SecurityNotice>>>({})
   const operationScope = useRef<Scope>('access')
   const running = useRef(false)
+  const uncertainSave = useRef(false)
   const setMessage = (message: string, kind: SecurityNotice['kind'] = 'progress') => {
     const scope = operationScope.current
     setNotices(previous => ({ ...previous, [scope]: { message, kind } }))
@@ -86,6 +87,7 @@ export default function SecurityCenter({ config, vaultKey, check, onChanged, onE
 
   }
   const commitKeys = async (purpose: 'passphrase' | 'recovery' | 'recover', record: KeyRecord, key: CryptoKey) => {
+    uncertainSave.current = false
     setMessage('Saving your change…')
     try {
       await securityCall('replaceKeys', { purpose, record }); valid()
@@ -94,7 +96,11 @@ export default function SecurityCenter({ config, vaultKey, check, onChanged, onE
     } catch (error) {
       const code = (error as { code?: string })?.code
       if (isSessionFailure(error) || ['functions/aborted', 'functions/failed-precondition', 'functions/invalid-argument'].includes(code || '')) throw error
-      throw new Error(`The save could not be confirmed and may already have succeeded. Keep any downloaded replacement kit. Lock and unlock with the new passphrase, or use your saved kit, before retrying. ${securityErrorMessage(error)}`)
+      uncertainSave.current = true
+      const instruction = purpose === 'recovery'
+        ? 'Your passphrase is unchanged. Keep the downloaded kit; lock and unlock, then compare the recovery kit ID with your saved file.'
+        : 'Keep the downloaded replacement kit if you have one. Lock and unlock using the new passphrase; if the save never committed, the previous passphrase still works.'
+      throw new Error(`The save could not be confirmed and may already have succeeded. ${instruction} ${securityErrorMessage(error)}`)
     }
   }
   const requireCurrent = (value: string) => {
@@ -119,6 +125,7 @@ export default function SecurityCenter({ config, vaultKey, check, onChanged, onE
       <SecurityFeedback notice={notices.migration} />
     </> : <>
       <p><strong>Recovery: {config.recovery ? 'Configured — keep your kit protected' : 'INCOMPLETE — no recovery kit is registered'}</strong></p>
+      {config.recovery && <p>Recovery kit ID: <code>{config.recovery.id}</code></p>}
       <p>Without a usable passphrase or recovery kit, your content cannot be recovered. Google verification alone cannot decrypt or replace access.</p>
       <form className="security-panel" noValidate aria-label="Change passphrase" onSubmit={event => { event.preventDefault(); void run(async () => {
         const secret = requireCurrent(current), replacement = newPass()
@@ -145,6 +152,7 @@ export default function SecurityCenter({ config, vaultKey, check, onChanged, onE
         <p>Enter your current passphrase here, then verify your passkey. Haven will prepare a kit on this device for you to download and confirm.</p>
         <form noValidate aria-label="Prepare recovery kit" onSubmit={event => { event.preventDefault(); void run(async () => {
           const secret = requireCurrent(recoveryPassphrase); setRecoveryPassphrase('')
+          uncertainSave.current = false
           setMessage('Checking your current passphrase…')
           const record = await latest()
           await unlockKeyRecord(secret, record); valid()
@@ -170,7 +178,7 @@ export default function SecurityCenter({ config, vaultKey, check, onChanged, onE
           }, 'recovery')}>Recover and set a new passphrase</button>
         </details>
         {pending && <RecoveryKitConfirmation kit={pending.kit} busy={busy} onCancel={() => {
-          setPending(null); setNotices(previous => ({ ...previous, recovery: { kind: 'info', message: 'Recovery setup cancelled. Your previous recovery settings are unchanged.' } }))
+          setPending(null); setNotices(previous => ({ ...previous, recovery: { kind: 'info', message: uncertainSave.current ? 'The last save outcome is unknown. Keep the downloaded kit. Lock and unlock, then compare the current recovery kit ID with the saved file before discarding anything.' : 'Recovery setup cancelled. Your previous recovery settings are unchanged.' } }))
         }} onConfirm={() => void run(async () => {
           const saved = pending
           setMessage('Verify your passkey to save this recovery kit…')
