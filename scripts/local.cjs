@@ -5,11 +5,17 @@ const root = path.resolve(__dirname, '..');
 const project = 'demo-haven-vault';
 const localEnv = 'OWNER_EMAIL=owner@example.com\nRP_ID=localhost\nEXPECTED_ORIGIN=http://localhost:5173\nENFORCE_APP_CHECK=false\nAUTH_SESSION_MINUTES=60\n';
 
+function localProcessEnv(environment = process.env) {
+  // This command runs a loopback-only demo stack, never a Compute Engine VM.
+  // Skip ADC's metadata-server probe; Windows may report EADDRNOTAVAIL for it.
+  // Scope the override to children, leaving deployment commands unchanged.
+  return { ...environment, METADATA_SERVER_DETECTION: 'none' };
+}
 function run(args) {
   // Keep this wrapper alive while Firebase handles Ctrl+C and exports data.
   const ignoreInterrupt = () => {};
   process.on('SIGINT', ignoreInterrupt);
-  const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
+  const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit', env: localProcessEnv() });
   process.removeListener('SIGINT', ignoreInterrupt);
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Command failed (${result.status ?? result.signal}).`);
@@ -62,4 +68,4 @@ if (require.main === module) {
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-module.exports = { setup, validateLocalEnv, checkRuntime };
+module.exports = { setup, validateLocalEnv, checkRuntime, localProcessEnv };

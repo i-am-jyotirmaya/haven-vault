@@ -39,6 +39,25 @@ The emulator simulates Google identity, but the backend still verifies WebAuthn 
 
 A virtual authenticator's credentials may disappear when DevTools/browser sessions end. If you keep emulator data but lose the matching local passkey, reset the disposable data and enroll again. Localhost credentials cannot sign in to your deployed vault.
 
+### Google Password Manager and Windows Hello
+
+The emulator's Google popup selects a **fictional Firebase identity**. It does
+not sign Chrome into a real Google account or unlock Google Password Manager.
+Chrome's real profile/provider handles passkeys separately. In Chrome, open
+Settings → Passwords and autofill → Google Password Manager to check the profile
+and available passkeys. Google Password Manager synchronization requires a real
+signed-in Chrome profile. Windows Hello can also store device-local passkeys.
+Haven cannot force a particular password manager to open.
+
+Enroll a separate test passkey for **http://localhost:5173**. A credential saved
+for your deployed hostname is not a localhost credential. If Chrome DevTools'
+virtual WebAuthn environment is enabled, disable it to test the real provider,
+or intentionally use its virtual authenticator for isolated testing. Never reset
+real Google Password Manager data to fix a disposable emulator login.
+
+References: [Chrome passkey management](https://support.google.com/chrome/answer/13168025)
+and [Chrome provider support](https://developers.google.com/identity/passkeys/supported-environments).
+
 ### Stop, persist, reset
 
 Press Ctrl+C to stop the local stack. Auth/Firestore/Storage emulator data exports into ignored `.emulator-data/`; the next development run imports it. An unclean termination may lose changes since the previous export. Saved data contains encrypted test files, authentication records, and public passkey material; use fictional data and keep it out of Git. Browser decrypted state and the encryption key are not exported.
@@ -61,6 +80,16 @@ These tests do not replace device checks for platform passkey UX, touch gestures
 
 ## Isolation and troubleshooting
 
+- `Detected demo project ID "demo-haven-vault"` is expected. Local child processes
+  set `METADATA_SERVER_DETECTION=none`, skipping the Google Cloud VM discovery
+  probe that can emit `MetadataLookupWarning` / `EADDRNOTAVAIL` on Windows.
+  This is scoped to local commands, not deployment, and does not change session
+  or passkey checks. On older branches, stop the stack and use
+  `$env:METADATA_SERVER_DETECTION = 'none'; pnpm dev:local` in PowerShell as a
+  temporary workaround. The warning alone does not indicate startup failed;
+  look for **All emulators ready** and the Vite localhost address. Any later fatal
+  error must be investigated separately. This setting does not make Google
+  Password Manager reachable or fix browser/network/provider failures.
 - Local mode hardcodes `demo-haven-vault` and connects all four browser SDKs before requests. Production `.env.local` values do not select a cloud project in this mode. The Functions region is fixed to `us-central1`.
 - `functions/.env.local` takes precedence over the project environment file in emulators. Startup rejects conflicting owner/RP/origin/App Check values instead of silently using cloud settings. Move or correct that override if startup reports a mismatch.
 - Do not manually run a partial emulator stack with a real project ID. Use `dev:local` or `test:local` so all required services use the same fictional project.

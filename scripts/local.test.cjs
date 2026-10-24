@@ -3,7 +3,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { setup, validateLocalEnv } = require('./local.cjs');
+const { setup, validateLocalEnv, localProcessEnv } = require('./local.cjs');
+
+test('local child processes disable metadata discovery without changing the parent environment', () => {
+  const parent = { PATH: 'fictional-path', METADATA_SERVER_DETECTION: 'assume-present' };
+  const local = localProcessEnv(parent);
+  assert.equal(local.METADATA_SERVER_DETECTION, 'none');
+  assert.equal(local.PATH, parent.PATH);
+  assert.equal(parent.METADATA_SERVER_DETECTION, 'assume-present');
+});
 
 test('local setup preserves existing files and rejects production overrides', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'haven-local-'));
