@@ -1,10 +1,9 @@
 # Everyday encrypted operations (Requirement 7)
 
-This implementation depends on the versioned-key, recovery and session work in
-PR #6 (`feat/key-recovery-access-management`). It incorporates current main,
-including the configured Firebase preview-test isolation. Until #6 merges, this
-PR targets that branch; retarget to main after its merge and recheck the diff.
-No deployment or real-vault mutation is part of this change.
+This implementation builds on the versioned-key, recovery and session work from
+PR #6, now merged into main at `89b313a`. The Requirement 7 branch includes that
+main merge, preserves the recovery/native-credential/privacy fixes, and targets
+main directly. No deployment or real-vault mutation is part of this change.
 
 ## Trust boundaries and operation states
 

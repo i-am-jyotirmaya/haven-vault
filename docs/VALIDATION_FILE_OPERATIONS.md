@@ -1,9 +1,10 @@
 # Requirement 7 validation
 
 All fixtures are fictional. No real vault, deployment, cloud migration or real
-file selection was used. The implementation includes current main (`fcba8d4`)
-and the updated PR #6 dependency (`1cf1284`), including its recovery-feedback and
-native credential/privacy follow-ups.
+file selection was used. The implementation includes main at `89b313a`, which
+squash-merged PR #6, including its recovery-feedback and native credential/privacy
+follow-ups. That main tree matches the already integrated dependency (`1cf1284`);
+resolving the squash-history merge preserves the previously tested runtime code.
 
 ## Executed checks
 
