@@ -38,5 +38,6 @@ jobs:
           VITE_VAULT_BACKEND_READY: 'true'
       - run: pnpm test:config
       - run: pnpm test:backend
+      # Includes signed authentication/recovery, file-operation fault tests and rules.
       - run: pnpm test:local
       - run: pnpm build

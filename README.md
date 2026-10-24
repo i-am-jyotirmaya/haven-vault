@@ -90,3 +90,7 @@ Tests cover encryption, authentication lifecycle, backend policy, deployment con
 ## License
 
 Haven source, documentation, and original fixtures are MIT licensed. Demo photographs are from Unsplash and are excluded from the MIT grant. Dependencies retain their respective licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Everyday encrypted file and collection operations, interruption/retry semantics,
+manual trash retention and storage limits are described in
+[File operations](docs/FILE_OPERATIONS.md).

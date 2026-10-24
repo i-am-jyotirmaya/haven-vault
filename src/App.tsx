@@ -1,3 +1,4 @@
+import { UploadQueue, operationGuidance, type QueueEntry } from './lib/uploadQueue';
 import { createPortal } from "react-dom";
 import {
   useCallback,
@@ -73,8 +74,8 @@ import {
   saveVaultConfig,
   saveVaultNote,
   updateVaultItem,
-  uploadVaultFile,
-  MAX_FILE_SIZE,
+  fileCall, loadCollections, saveCollections, reconcileOperations, displayCollection,
+  type CollectionCatalog,
 } from "./lib/vault";
 import { lockVaultState, sessionDeadline, type VaultState } from "./lib/vaultState";
 import { clearPlaintext, createPlaintextUrl, revokePlaintextUrl } from "./lib/plaintext";
@@ -88,7 +89,7 @@ import Preview from "./components/Preview";
 
 type Section = "My vault" | "Recent" | "Favorites" | "Trash" | "Security";
 type Category = "all" | "photo" | "document" | "note";
-type ModalKind = "upload" | "note" | "collection" | "setup" | "help" | null;
+type ModalKind = "upload" | "note" | "collection" | "setup" | "help" | "item" | "manage-collections" | "empty-trash" | null;
 const isDemoPreview =
   new URLSearchParams(window.location.search).get("demo") === "1" || !isFirebaseConfigured;
 const kindNames = { photo: "Photos", document: "Documents", note: "Notes", other: "Other" };
@@ -172,6 +173,24 @@ export default function App() {
   const [recoveryActive, setRecoveryActive] = useState(false);
   const [enrollmentStep, setEnrollmentStep] = useState<"confirm" | "registering" | null>(null);
   const enrollmentAction = useRef<{ start: () => void; cancel: () => void } | null>(null);
+  const [queueEntries, setQueueEntries] = useState<QueueEntry[]>([]);
+  const queueRef = useRef<UploadQueue | null>(null);
+  const [pendingOperations, setPendingOperations] = useState<{ id: string; state: string }[]>([]);
+  const [catalog, setCatalog] = useState<CollectionCatalog | null>(null);
+  const [storageUsage, setStorageUsage] = useState<number | null>(null);
+  const [editingItem, setEditingItem] = useState<DisplayItem | null>(null);
+  const [itemAction, setItemAction] = useState<'rename' | 'move' | 'edit'>('rename');
+  const [editName, setEditName] = useState('');
+  const [editText, setEditText] = useState('');
+  const [editDestination, setEditDestination] = useState('Personal');
+  const [managedCollection, setManagedCollection] = useState('');
+  const [collectionDestination, setCollectionDestination] = useState('Personal');
+  const [bulkResults, setBulkResults] = useState<string[]>([]);
+  const downloadActive = useRef(false);
+  const noteSaving = useRef(false);
+  const catalogSaving = useRef(false);
+  const noteIdentity = useRef(crypto.randomUUID());
+  const itemOperations = useRef(new Set<string>());
   const [progress, setProgress] = useState("");
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
@@ -198,6 +217,11 @@ export default function App() {
   }, [toast]);
   const clearSensitiveState = useCallback(() => {
     generationRef.current++;
+    queueRef.current?.close(); queueRef.current = null; setQueueEntries([]);
+    setPendingOperations([]); setCatalog(null); setStorageUsage(null);
+    setEditingItem(null); setEditName(''); setEditText(''); setEditDestination('Personal');
+    setManagedCollection(''); setCollectionDestination('Personal'); setBulkResults([]);
+    itemOperations.current.clear(); downloadActive.current = false; noteSaving.current = false; catalogSaving.current = false;
     setRecoveryActive(false);
     clearPlaintext();
     setItems([]);
@@ -326,7 +350,7 @@ export default function App() {
   }, [menuId]);
 
   const liveItems = useMemo(() => items.filter((item) => !item.trashed), [items]);
-  const totalSize = liveItems.reduce((total, item) => total + item.size, 0);
+  const totalSize = items.reduce((total, item) => total + item.size, 0);
   const visibleItems = useMemo(() => {
     let result = items.filter((item) => (section === "Trash" ? item.trashed : !item.trashed));
     if (section === "Favorites") result = result.filter((item) => item.favorite);
@@ -361,6 +385,7 @@ export default function App() {
     setMobileNav(false);
   };
   const openModal = (kind: ModalKind) => {
+    if (kind === 'note') { setNoteTitle(''); setNoteText(''); noteIdentity.current = crypto.randomUUID(); }
     setModal(kind);
     setError("");
     setProgress("");
@@ -377,6 +402,7 @@ export default function App() {
     }
     const current = ++authenticationGeneration.current;
     const work = generationRef.current;
+    let passkeyAccepted = false;
     setBusy(true);
     setError("");
     try {
@@ -410,6 +436,7 @@ export default function App() {
       }));
       else await signInWithPasskey();
       if (current !== authenticationGeneration.current) return;
+      passkeyAccepted = true;
       const expiresAt = getVaultSessionDeadline();
       transition({ status: "locked", expiresAt, config: undefined });
       const config = await getVaultConfig();
@@ -420,7 +447,20 @@ export default function App() {
       setConfirmPassphrase("");
     } catch (err) {
       if (current === authenticationGeneration.current) {
-        if (isAuthenticationFailure(err)) { handleVaultError(err); return; }
+        if (isAuthenticationFailure(err)) {
+          // A permission denial during bootstrap is not evidence that an
+          // existing session expired. Keep the failing step and server reason
+          // visible after the same fail-closed cleanup used for sign-out.
+          const reason = errorMessage(err);
+          const code = (err as { code?: unknown } | null)?.code;
+          const diagnostic = typeof code === 'string' && /^(functions\/|auth\/)?[a-z-]+$/.test(code)
+            ? ` (${code})` : '';
+          endSession();
+          setError(passkeyAccepted
+            ? `Your passkey was accepted, but Haven could not load your vault. ${reason}${diagnostic} Check the deployed Firebase functions, rules and project configuration before trying again.`
+            : `${enroll ? 'Passkey setup' : 'Passkey sign-in'} failed: ${reason}${diagnostic} Try the passkey registered for this vault on its original website.`);
+          return;
+        }
         const message = errorMessage(err);
         setError(
           message.includes("internal") ||
@@ -475,11 +515,15 @@ export default function App() {
       if (!workIsCurrent(current, false)) return;
       // Keep the saved config if loading fails or a later unlock is needed.
       transition({ status: "locked", expiresAt: state.expiresAt, config: encryptionConfig });
+      const reconciled = await reconcileOperations(key);
       const loaded = await listVaultItems(key);
+      const loadedCatalog = await loadCollections(key, loaded);
       await validateVaultSession();
       if (!workIsCurrent(current, false) || document.visibilityState !== "visible" || document.documentElement.dataset.havenConcealed) return;
       transition({ status: "unlocked", expiresAt: getVaultSessionDeadline(), config: encryptionConfig, key });
-      setItems(loaded);
+      setItems(loaded); setCatalog(loadedCatalog); setCollections(loadedCatalog.entries.map(c => c.name));
+      setPendingOperations(reconciled.filter(o => !['completed', 'cancelled'].includes(o.state)));
+      void fileCall<{ objectBytes: number }>(key, 'usage').then(usage => { if (workIsCurrent(current)) setStorageUsage(usage.objectBytes); }).catch(() => {});
       setSection("My vault");
       setCategory("all");
       setCollection("");
@@ -491,7 +535,8 @@ export default function App() {
     }
   };
   const changeItem = async (item: DisplayItem, changes: Partial<DisplayItem>) => {
-    if (!canUseVault()) return;
+    if (!canUseVault() || busy || itemOperations.current.has(item.id)) return;
+    itemOperations.current.add(item.id); setBusy(true); setProgress('Saving encrypted change…'); setError('');
     const next = { ...item, ...changes, updatedAt: Date.now() };
     const current = generationRef.current;
     try {
@@ -510,46 +555,35 @@ export default function App() {
     } catch (err) {
       if (current === generationRef.current) handleVaultError(err);
     }
-    if (current === generationRef.current) setMenuId(null);
+    itemOperations.current.delete(item.id);
+    if (current === generationRef.current) { setMenuId(null); setBusy(false); setProgress(''); }
+  };
+  const refresh = async () => {
+    if (!vaultKey || !canUseVault()) return;
+    const current = generationRef.current;
+    try {
+      const reconciled = await reconcileOperations(vaultKey);
+      const loaded = await listVaultItems(vaultKey);
+      const latest = await loadCollections(vaultKey, loaded);
+      const usage = await fileCall<{ objectBytes: number }>(vaultKey, 'usage');
+      if (!workIsCurrent(current)) return;
+      setItems(loaded); setCatalog(latest); setCollections(latest.entries.map(c => c.name)); setStorageUsage(usage.objectBytes);
+      setPendingOperations(reconciled.filter(o => !['completed', 'cancelled'].includes(o.state)));
+      setError('');
+    } catch (err) { if (workIsCurrent(current)) handleVaultError(err); }
   };
   const upload = async (files: FileList | File[]) => {
     if (!canUseVault()) return;
-    if (demo) {
-      openModal("setup");
-      return;
-    }
+    if (demo) { openModal('setup'); return; }
     if (!vaultKey) return;
-    const fileList = Array.from(files);
-    if (!fileList.length) return;
-    if (fileList.some((file) => file.size > MAX_FILE_SIZE)) {
-      setError("Each file must be 50 MB or smaller.");
-      return;
-    }
     const current = generationRef.current;
-    const key = vaultKey;
-    setBusy(true);
-    setError("");
-    let done = 0;
-    try {
-      for (const file of fileList) {
-        if (!workIsCurrent(current)) return;
-        setProgress(`Encrypting and uploading ${++done} of ${fileList.length}…`);
-        const item = await uploadVaultFile(key, file, uploadCollection);
-        if (!workIsCurrent(current)) return;
-        setItems((values) => [item, ...values]);
-      }
-      setModal(null);
-      notify(
-        `${fileList.length === 1 ? "File" : `${fileList.length} files`} encrypted and saved to your vault.`,
-      );
-    } catch (err) {
-      if (current === generationRef.current) handleVaultError(err);
-    } finally {
-      if (current === generationRef.current) {
-        setBusy(false);
-        setProgress("");
-      }
-    }
+    if (!queueRef.current) queueRef.current = new UploadQueue(vaultKey, uploadCollection,
+      () => { if (!workIsCurrent(current)) throw new Error('Vault locked.'); },
+      entries => { if (workIsCurrent(current)) setQueueEntries(entries); },
+      item => { if (workIsCurrent(current)) setItems(values => [item, ...values.filter(v => v.id !== item.id)]); });
+    queueRef.current.add(Array.from(files), uploadCollection);
+    setModal(null);
+    if (uploadRef.current) uploadRef.current.value = '';
   };
   const saveNote = async (event: FormEvent) => {
     event.preventDefault();
@@ -558,7 +592,8 @@ export default function App() {
       openModal("setup");
       return;
     }
-    if (!vaultKey || !noteTitle.trim()) return;
+    if (!vaultKey || !noteTitle.trim() || noteSaving.current) return;
+    noteSaving.current = true;
     const current = generationRef.current;
     setBusy(true);
     setError("");
@@ -568,6 +603,7 @@ export default function App() {
         noteTitle.trim(),
         noteText,
         uploadCollection,
+        noteIdentity.current,
       );
       if (!workIsCurrent(current)) return;
       setItems((values) => [item, ...values]);
@@ -578,12 +614,13 @@ export default function App() {
     } catch (err) {
       if (current === generationRef.current) handleVaultError(err);
     } finally {
-      if (current === generationRef.current) setBusy(false);
+      if (current === generationRef.current) { setBusy(false); noteSaving.current = false; }
     }
   };
   const download = async (item: DisplayItem) => {
-    if (!canUseVault()) return;
+    if (!canUseVault() || downloadActive.current || busy) return;
     const current = generationRef.current;
+    downloadActive.current = true; setBusy(true); setProgress('Downloading and decrypting…'); setError('');
     try {
       let blob: Blob;
       if (demo) {
@@ -615,6 +652,8 @@ export default function App() {
       notify("Downloaded a decrypted copy. Keep it somewhere safe.");
     } catch (err) {
       if (current === generationRef.current) handleVaultError(err);
+    } finally {
+      if (current === generationRef.current) { downloadActive.current = false; setBusy(false); setProgress(''); }
     }
   };
   const deletePermanently = async () => {
@@ -633,6 +672,89 @@ export default function App() {
     } finally {
       if (current === generationRef.current) setBusy(false);
     }
+  };
+
+  const editItem = (item: DisplayItem, action: 'rename' | 'move' | 'edit') => {
+    setEditingItem(item); setItemAction(action); setEditName(item.name); setEditText(item.text || ''); setEditDestination(item.collection); openModal('item'); setMenuId(null);
+  };
+  const submitItem = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!editingItem || !canUseVault() || itemOperations.current.has(editingItem.id)) return;
+    const current = generationRef.current;
+    const changes = itemAction === 'move' ? { collection: editDestination } : itemAction === 'edit' ? { name: editName.trim(), text: editText, size: new TextEncoder().encode(editText).byteLength } : { name: editName.trim() };
+    setBusy(true); setError(''); itemOperations.current.add(editingItem.id);
+    try {
+      const next = { ...editingItem, ...changes };
+      if (!demo) await updateVaultItem(vaultKey!, next);
+      if (!workIsCurrent(current)) return;
+      setItems(values => values.map(v => v.id === next.id ? next : v));
+      setModal(null); setEditingItem(null); setEditName(''); setEditText(''); notify('Change saved.');
+    } catch (err) { if (current === generationRef.current) setError(operationGuidance(err)); }
+    finally { itemOperations.current.delete(editingItem.id); if (current === generationRef.current) setBusy(false); }
+  };
+  const createCollection = async (event: FormEvent) => {
+    event.preventDefault(); if (!canUseVault() || catalogSaving.current) return;
+    const current = generationRef.current, name = newCollection.trim();
+    if (!name || allCollections.some(c => c.toLocaleLowerCase() === name.toLocaleLowerCase())) { setError('Choose a unique collection name.'); return; }
+    setBusy(true); catalogSaving.current = true;
+    try {
+      if (demo) setCollections(values => [...values, name]);
+      else {
+        const latest = await loadCollections(vaultKey!, items); if (!workIsCurrent(current)) return;
+        const saved = await saveCollections(vaultKey!, latest, [...latest.entries, { id: crypto.randomUUID(), name, legacyNames: [] }]);
+        if (!workIsCurrent(current)) return; setCatalog(saved); setCollections(saved.entries.map(c => c.name));
+      }
+      setNewCollection(''); setModal(null); openSection('My vault', name); setUploadCollection(name); notify('Collection saved, including when empty.');
+    } catch (err) { if (current === generationRef.current) handleVaultError(err); }
+    finally { if (current === generationRef.current) { setBusy(false); catalogSaving.current = false; } }
+  };
+  const manageCollection = async (remove: boolean) => {
+    if (!canUseVault() || !vaultKey || !catalog || busy) return;
+    const original = catalog.entries.find(c => c.name === managedCollection);
+    if (!original || original.name === 'Personal') { setError('Personal is the default collection and cannot be renamed or deleted.'); return; }
+    const current = generationRef.current; setBusy(true); setBulkResults([]); setError('');
+    try {
+      let latest = await loadCollections(vaultKey, items);
+      if (latest.revision !== catalog.revision) throw new Error('Collections changed. Reload the latest collections.');
+      if (remove) {
+        if (collectionDestination === original.name) throw new Error('Choose another destination first.');
+        const loaded = await listVaultItems(vaultKey); if (!workIsCurrent(current)) return;
+        const results: string[] = [];
+        for (const item of loaded.filter(i => i.collectionId === original.id || i.collection === original.name)) {
+          if (!workIsCurrent(current)) return;
+          try { await updateVaultItem(vaultKey, { ...item, collection: collectionDestination }); results.push(`${item.name}: moved`); }
+          catch { results.push(`${item.name}: move failed; retry collection deletion`); }
+          if (!workIsCurrent(current)) return; setBulkResults([...results]);
+        }
+        latest = await loadCollections(vaultKey, items);
+        if (latest.revision !== catalog.revision) throw new Error('Collections changed during the moves. Reload and retry; completed moves were retained.');
+        const remaining = await listVaultItems(vaultKey); if (!workIsCurrent(current)) return;
+        setItems(remaining);
+        if (remaining.some(i => i.collectionId === original.id || i.collection === original.name)) throw new Error('Some moves failed. The collection is retained. Reload and retry.');
+        // Keep the epoch captured before reading remaining membership; concurrent writes reject catalog removal.
+      }
+      if (!workIsCurrent(current)) return;
+      const entries = remove ? latest.entries.filter(c => c.id !== original.id) : latest.entries.map(c => c.id === original.id ? { ...c, name: newCollection.trim() } : c);
+      const saved = await saveCollections(vaultKey, latest, entries);
+      if (!workIsCurrent(current)) return;
+      setCatalog(saved); setCollections(saved.entries.map(c => c.name)); setItems(values => values.map(i => displayCollection(i, saved))); setCollection(''); setUploadCollection(remove ? 'Personal' : newCollection.trim()); setModal(null); notify(remove ? 'Collection removed. Its items were retained.' : 'Collection renamed.');
+    } catch (err) { if (current === generationRef.current) handleVaultError(err); }
+    finally { if (current === generationRef.current) setBusy(false); }
+  };
+  const emptyTrash = async () => {
+    if (!canUseVault() || busy) return;
+    const current = generationRef.current; setBusy(true); setBulkResults([]);
+    const outcomes: string[] = [];
+    for (const item of items.filter(i => i.trashed)) {
+      if (!workIsCurrent(current)) break;
+      try {
+        if (!demo) await permanentlyDeleteVaultItem(item, vaultKey!);
+        if (!workIsCurrent(current)) break;
+        setItems(values => values.filter(v => v.id !== item.id)); outcomes.push(`${item.name}: deleted`);
+      } catch { outcomes.push(`${item.name}: deletion unfinished; retry from trash`); }
+      if (workIsCurrent(current)) setBulkResults([...outcomes]);
+    }
+    if (workIsCurrent(current)) setBusy(false);
   };
 
   const contentModal =
@@ -1058,15 +1180,14 @@ export default function App() {
                 <Cloud size={15} />
                 {demo ? "Sample storage" : "Encrypted storage"}
               </span>
-              <b>{formatBytes(totalSize)}</b>
-            </div>
-            <div className="storage-bar">
-              <span />
+              <b>{storageUsage === null ? "Not measured" : formatBytes(storageUsage)}</b>
             </div>
             <p>
-              {liveItems.length}{" "}
-              {demo ? "sample files to explore" : "files, encrypted before upload"}
+              {formatBytes(totalSize)} user content, including trash.
             </p>
+            <details className="storage-details"><summary>Storage and limits</summary><p>
+              The rounded object snapshot is measured on unlock or reload. It includes trash, temporary staging and retained migration copies; encrypted metadata is additional. Per file: 50 MiB; notes: 256 KiB. No app aggregate quota is configured. Provider capacity and remaining space are not known.
+            </p></details>
           </div>
           <button className="profile" onClick={() => openSection("Security")}>
             <span className="avatar">{demo ? "Y" : "JS"}</span>
@@ -1122,6 +1243,8 @@ export default function App() {
           </div>
         </header>
         <main className="main-content">
+          {error && !modal && !deleteItem && <div className="error-message" role="alert">{error}<button className="button secondary" onClick={() => void refresh()}>Reload latest / retry reconciliation</button></div>}
+          {busy && <div role="status" aria-live="polite">{progress || 'Applying operation… Please keep Haven open.'}</div>}
           {!demo && vaultState.status === 'unlocked' && vaultState.config.version === 2 && !vaultState.config.recovery && <div className="setup-notice" role="status"><span><strong>Recovery setup incomplete.</strong> Save and confirm a recovery kit in Security. Without a usable passphrase or recovery kit, content recovery is impossible.</span><button className="button secondary" onClick={() => openSection('Security')}>Set up recovery</button></div>}
           {section === "Security" ? (
             <>
@@ -1259,6 +1382,23 @@ export default function App() {
                   );
                 })}
               </section>
+              {(queueEntries.length > 0 || pendingOperations.length > 0) && <section className="operation-panel" aria-label="File operations">
+                <div role="status" aria-live="polite">{queueEntries.filter(e => e.state === 'completed').length} completed, {queueEntries.filter(e => e.state === 'failed').length} failed, {queueEntries.filter(e => e.state === 'cancelled').length} cancelled. Successful uploads are retained.</div>
+                <button className="button secondary" onClick={() => queueRef.current?.cancelRemaining()}>Cancel remaining queue</button>
+                {queueEntries.map(entry => <div className="operation-row" key={entry.id}>
+                  <span>{entry.name}</span><strong role="status" aria-live="polite">{entry.state}</strong>
+                  {entry.state === 'uploading' && <progress aria-label={`Upload progress for ${entry.name}`} value={entry.transferred} max={entry.total} />}
+                  {entry.state === 'uploading' && <small>{formatBytes(entry.transferred)} / {formatBytes(entry.total)} encrypted bytes</small>}
+                  {entry.error && <span role="alert">{entry.error}</span>}
+                  {entry.state === 'failed' && <button className="button secondary" onClick={() => queueRef.current?.retry(entry.id)}>Retry upload</button>}
+                  {!['completed', 'cancelled'].includes(entry.state) && <button className="button secondary" onClick={() => void queueRef.current?.cancel(entry.id)}>Cancel / retry cleanup</button>}
+                </div>)}
+                {pendingOperations.length > 0 && <p>Interrupted operations were found. Plaintext is never cached: if encrypted transfer did not finish, cancel its receipt, then reselect the original file.</p>}
+                {pendingOperations.map(op => <div className="operation-row" key={op.id}><span>Operation {op.id.slice(0, 8)}: {op.state}</span>
+                  <button onClick={() => void refresh()}>Retry reconciliation</button>
+                  <button onClick={async () => { const current = generationRef.current; try { if (!vaultKey) return; await fileCall(vaultKey, 'cancel', { id: op.id }); if (workIsCurrent(current)) await refresh(); } catch (err) { if (workIsCurrent(current)) handleVaultError(err); } }}>Cancel / cleanup</button>
+                </div>)}
+              </section>}
               <section className="files-section">
                 <div className="files-heading">
                   <div>
@@ -1268,7 +1408,7 @@ export default function App() {
                     </h2>
                     <p>
                       {section === "Trash"
-                        ? "A second chance for things you might still need."
+                        ? "Manual retention: items remain here until you explicitly delete them. Trash uses storage."
                         : section === "Favorites"
                           ? "The things you want to keep close."
                           : section === "Recent"
@@ -1277,6 +1417,9 @@ export default function App() {
                     </p>
                   </div>
                   <div className="file-actions">
+                    <button className="button secondary" onClick={() => void refresh()} disabled={busy || demo}>Reload latest</button>
+                    {section === 'Trash' && <button className="button secondary" onClick={() => { setBulkResults([]); openModal('empty-trash'); }}>Empty trash</button>}
+                    {collection && !demo && <button className="button secondary" onClick={() => { setManagedCollection(collection); setNewCollection(collection); setCollectionDestination('Personal'); openModal('manage-collections'); }}>Manage collection</button>}
                     <button
                       className="button secondary note-action"
                       onClick={() => openModal("note")}
@@ -1458,6 +1601,8 @@ export default function App() {
                               <button
                                 className="icon-button more-button"
                                 aria-label={`Actions for ${item.name}`}
+                                aria-expanded={menuId === item.id}
+                                aria-controls={menuId === item.id ? `actions-${item.id}` : undefined}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   setMenuId(menuId === item.id ? null : item.id);
@@ -1467,7 +1612,7 @@ export default function App() {
                               </button>
                               {menuId === item.id && (
                                 <div
-                                  className="item-menu"
+                                  className="item-menu" id={`actions-${item.id}`}
                                   onClick={(event) => event.stopPropagation()}
                                 >
                                   <button
@@ -1496,10 +1641,13 @@ export default function App() {
                                     <Star size={15} />
                                     {item.favorite ? "Remove favorite" : "Add to favorites"}
                                   </button>
+                                  <button disabled={busy || !!item.deleting} onClick={() => editItem(item, 'rename')}>Rename</button>
+                                  <button disabled={busy || !!item.deleting} onClick={() => editItem(item, 'move')}>Move to collection</button>
+                                  {item.kind === 'note' && <button disabled={busy || !!item.deleting} onClick={() => editItem(item, 'edit')}>Edit note</button>}
                                   {item.trashed ? (
                                     <>
                                       <button
-                                        onClick={() => void changeItem(item, { trashed: false })}
+                                        disabled={busy || !!item.deleting} onClick={() => void changeItem(item, { trashed: false })}
                                       >
                                         <RotateCcw size={15} />
                                         Restore file
@@ -1518,7 +1666,7 @@ export default function App() {
                                   ) : (
                                     <button
                                       className="danger"
-                                      onClick={() => void changeItem(item, { trashed: true })}
+                                      disabled={busy || !!item.deleting} onClick={() => void changeItem(item, { trashed: true })}
                                     >
                                       <Trash2 size={15} />
                                       Move to trash
@@ -1589,7 +1737,7 @@ export default function App() {
           }}
         >
           <p className="muted">
-            Photos, documents, and the things you want to keep. Up to 50 MB per file.
+            Photos, documents, and the things you want to keep. Up to 50 MiB per file. Unsupported preview formats can still be downloaded.
           </p>
           <button
             className={`upload-dropzone ${dragging ? "dragging" : ""}`}
@@ -1691,27 +1839,10 @@ export default function App() {
       {modal === "collection" && (
         <Modal concealed={policy.concealed} title="A place for everything" onClose={() => setModal(null)}>
           <p className="muted">
-            Give related files a little home of their own. Collections are saved with the files you
-            add to them.
+            Collections are encrypted and saved independently. Empty collections remain available.
           </p>
           <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const name = newCollection.trim();
-              if (
-                !name ||
-                allCollections.some((value) => value.toLowerCase() === name.toLowerCase())
-              ) {
-                setError("Choose a new, unique collection name.");
-                return;
-              }
-              setCollections((values) => [...values, name]);
-              setNewCollection("");
-              setModal(null);
-              openSection("My vault", name);
-              setUploadCollection(name);
-              notify("Collection created. Add a file to keep it in your vault.");
-            }}
+            onSubmit={createCollection}
           >
             <label className="field-label" htmlFor="collection-name">
               Collection name
@@ -1727,13 +1858,37 @@ export default function App() {
               placeholder="A name that feels right"
             />
             {error && <div className="error-message">{error}</div>}
-            <button className="button primary full" type="submit">
+            <button className="button primary full" type="submit" disabled={busy}>
               <Plus size={17} />
               Create collection
             </button>
           </form>
         </Modal>
       )}
+      {modal === 'item' && editingItem && <Modal concealed={policy.concealed} title={itemAction === 'edit' ? 'Edit note' : itemAction === 'move' ? 'Move to collection' : 'Rename item'} onClose={() => { if (!busy) { setModal(null); setEditName(''); setEditText(''); setEditingItem(null); } }}>
+        <form onSubmit={submitItem}>
+          {itemAction !== 'move' && <><label className="field-label" htmlFor="edit-item-name">Name</label><input id="edit-item-name" className="text-input" value={editName} onChange={e => setEditName(e.target.value)} maxLength={1024} required /></>}
+          {itemAction === 'edit' && <><label className="field-label" htmlFor="edit-note-text">Note</label><textarea id="edit-note-text" className="text-input" value={editText} onChange={e => setEditText(e.target.value)} /></>}
+          {itemAction === 'move' && <><label className="field-label" htmlFor="move-destination">Destination</label><select id="move-destination" className="text-input" value={editDestination} onChange={e => setEditDestination(e.target.value)}>{allCollections.map(c => <option key={c}>{c}</option>)}</select></>}
+          {error && <div role="alert" className="error-message">{error}<button type="button" onClick={async () => { await refresh(); }}>Reload latest (keep draft)</button><p>Close this editor and reopen the latest item before applying a stale draft.</p></div>}
+          <button className="button primary" disabled={busy} type="submit">{busy ? 'Saving…' : 'Save change'}</button>
+        </form>
+      </Modal>}
+      {modal === 'manage-collections' && <Modal concealed={policy.concealed} title={`Manage ${managedCollection}`} onClose={() => { if (!busy) setModal(null); }}>
+        <label className="field-label" htmlFor="rename-collection">Collection name</label><input id="rename-collection" className="text-input" value={newCollection} onChange={e => setNewCollection(e.target.value)} maxLength={120} />
+        <button className="button primary" disabled={busy || managedCollection === 'Personal'} onClick={() => void manageCollection(false)}>Save collection name</button>
+        <p>Deleting a collection retains every item, including trash. Choose where its items should go. Interrupted moves remain visible and can be retried.</p>
+        <label className="field-label" htmlFor="collection-destination">Destination before deletion</label><select id="collection-destination" className="text-input" value={collectionDestination} onChange={e => setCollectionDestination(e.target.value)}>{allCollections.filter(c => c !== managedCollection).map(c => <option key={c}>{c}</option>)}</select>
+        <button className="button secondary" disabled={busy || managedCollection === 'Personal'} onClick={() => void manageCollection(true)}>Move items and delete collection</button>
+        {error && <div role="alert" className="error-message">{error}<button onClick={() => void refresh()}>Reload latest</button></div>}
+        <div role="status">{bulkResults.map((r, i) => <p key={i}>{r}</p>)}</div>
+      </Modal>}
+      {modal === 'empty-trash' && <Modal concealed={policy.concealed} title="Permanently empty trash?" onClose={() => { if (!busy) setModal(null); }}>
+        <p>Each trashed item will be permanently removed. Previously downloaded copies, retained key-migration safeguards and exported backups cannot be erased by this action. Failed deletions remain in trash for retry.</p>
+        <button className="button secondary" disabled={busy} onClick={() => setModal(null)}>Keep trash</button>
+        <button className="button primary" disabled={busy} onClick={() => void emptyTrash()}>{busy ? 'Deleting…' : 'Confirm permanent deletion of trash'}</button>
+        <div role="status">{bulkResults.map((r, i) => <p key={i}>{r}</p>)}</div>
+      </Modal>}
       {contentModal}
       {deleteItem && (
         <Modal
@@ -1745,8 +1900,9 @@ export default function App() {
         >
           <p className="muted">
             <strong>{deleteItem.name}</strong> will be removed from your vault. This cannot be
-            undone.
+            undone. Copies previously downloaded, retained by key migration or exported in backups cannot be erased.
           </p>
+          {error && <div className="error-message" role="alert">{error} The item remains visible until cleanup is confirmed. Retry deletion after reconnecting.</div>}
           <div className="modal-buttons">
             <button className="button secondary" onClick={() => setDeleteItem(null)}>
               Keep file

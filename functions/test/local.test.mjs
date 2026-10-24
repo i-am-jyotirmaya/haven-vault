@@ -1,7 +1,7 @@
 // End-to-end against disposable emulators. No cloud credentials or auth bypasses.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, generateKeyPairSync, randomBytes, sign, webcrypto } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, webcrypto } from 'node:crypto';
 import { encodeCBOR } from '@levischuck/tiny-cbor';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { initializeAuth, inMemoryPersistence, connectAuthEmulator, GoogleAuthProvider, signInWithCredential, signInWithCustomToken, signOut } from 'firebase/auth';
@@ -68,7 +68,8 @@ test('local owner enrollment, signed passkey login, encrypted data, and session 
     await signInWithCredential(auth, google);
     const uid = auth.currentUser.uid;
     assert.equal((await call('vaultSessionInfo')).enrolled, false);
-    const note = doc(db, `users/${uid}/items/local-note`);
+    const itemId = randomUUID();
+    const note = doc(db, `users/${uid}/items/${itemId}`);
     await assert.rejects(getDoc(note), { code: 'permission-denied' });
     const options = await call('registrationOptions');
     assert.equal(options.options.rp.id, 'localhost');
@@ -83,10 +84,14 @@ test('local owner enrollment, signed passkey login, encrypted data, and session 
     const plaintext = Buffer.from('Fictional local testing fixture');
     const ciphertext = Buffer.from(await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext));
     const payload = { version: 1, iv: iv.toString('base64'), ciphertext: ciphertext.toString('base64') };
-    await setDoc(note, { payload });
+    await setDoc(doc(db, `users/${uid}/vault/config`), { version: 1, salt: randomBytes(32).toString('base64'), iterations: 600000, verifier: payload });
+    await assert.rejects(setDoc(note, { payload }), { code: 'permission-denied' });
+    const bytes = Buffer.concat([iv, ciphertext]);
+    await call('securityOperation', { action: 'files.begin', generation: 'legacy', id: itemId, itemId, kind: 'upload', payload, expectedRevision: 0, catalogRevision: 0, bytes: bytes.length, hash: createHash('sha256').update(bytes).digest('hex') });
+    const file = ref(storage, `staged/${uid}/legacy/${itemId}`);
+    await uploadBytes(file, bytes, { contentType: 'application/octet-stream' });
+    await call('securityOperation', { action: 'files.finalize', generation: 'legacy', id: itemId });
     assert.deepEqual((await getDoc(note)).data().payload, payload);
-    const file = ref(storage, `vaults/${uid}/local-file`);
-    await uploadBytes(file, Buffer.concat([iv, ciphertext]), { contentType: 'application/octet-stream' });
     const stored = Buffer.from(await getBytes(file));
     const decrypted = Buffer.from(await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv: stored.subarray(0, 12) }, key, stored.subarray(12)));
     assert.deepEqual(decrypted, plaintext);

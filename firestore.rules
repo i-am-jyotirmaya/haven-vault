@@ -57,25 +57,19 @@ service cloud.firestore {
     }
     match /users/{uid}/items/{itemId} {
       allow read: if liveSession(uid);
-      allow delete: if liveSession(uid) && legacyWrites(uid);
-      allow create, update: if liveSession(uid) && legacyWrites(uid)
-        && itemId.matches('^[A-Za-z0-9_-]{1,128}$')
-        && request.resource.data.keys().hasOnly(['payload'])
-        && request.resource.data.keys().hasAll(['payload'])
-        && encrypted(request.resource.data.payload) && request.resource.data.payload.version == 1;
+      allow write: if false;
     }
     match /users/{uid}/generations/{generation}/items/{itemId} {
       allow read: if liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation)
         || get(/databases/$(database)/documents/users/$(uid)/vault/migration).data.record.generation == generation);
-      allow create: if liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation))
+      // Migration creates immutable records in its inactive generation only.
+      allow create: if liveSession(uid) && staging(uid, generation)
         && itemId.matches('^[a-f0-9-]{36}$')
         && request.resource.data.keys().hasOnly(['payload'])
         && encrypted(request.resource.data.payload) && request.resource.data.payload.version == 2;
-      allow update: if liveSession(uid) && activeGeneration(uid, generation)
-        && request.resource.data.keys().hasOnly(['payload'])
-        && encrypted(request.resource.data.payload) && request.resource.data.payload.version == 2;
-      allow delete: if liveSession(uid) && activeGeneration(uid, generation);
+      allow update, delete: if false;
     }
+
     // Challenge, credential, owner, session and rate-limit records are Admin SDK only.
     match /{document=**} {
       allow read, write: if false;

@@ -29,7 +29,8 @@ export async function migrateVault(passphrase: string, legacy: LegacyVaultConfig
     for (const [index, source] of originals.docs.entries()) {
       check(); await validateVaultSession(); check()
       progress(`Verifying encrypted item ${index + 1} of ${originals.size}…`)
-      const value = await decryptJson<VaultItem>(oldKey, source.data().payload, `metadata:${source.id}`); check()
+      const originalValue = await decryptJson<VaultItem>(oldKey, source.data().payload, `metadata:${source.id}`); check()
+      const value = source.data().staged || originalValue.staged ? { ...originalValue, staged: false } : originalValue
       if (value.id !== source.id) throw new Error('The legacy item identifier is invalid. Originals were preserved.')
       const destination = doc(database, 'users', uid, 'generations', migration.record.generation, 'items', source.id)
       const staged = await getDocFromServer(destination); check()
@@ -41,7 +42,7 @@ export async function migrateVault(passphrase: string, legacy: LegacyVaultConfig
       const decoded = await decryptJson(key, saved.data()!.payload, `metadata:${source.id}`); check()
       if (JSON.stringify(value) !== JSON.stringify(decoded)) throw new Error('Staged metadata failed verification. Originals were preserved.')
       if (value.kind !== 'note') {
-        const original = await getBlob(ref(bucket, `vaults/${uid}/${source.id}`), 50 * 1024 * 1024 + 29); check()
+        const original = await getBlob(ref(bucket, source.data().staged || originalValue.staged ? `staged/${uid}/legacy/${source.id}` : `vaults/${uid}/${source.id}`), 50 * 1024 * 1024 + 29); check()
         const raw = await decryptFile(oldKey, original, `file:${source.id}`)
         try {
           check()
@@ -64,6 +65,16 @@ export async function migrateVault(passphrase: string, legacy: LegacyVaultConfig
       check()
       if (!completed.has(source.id)) { await securityCall('migrationItem', { id: source.id, hasFile: value.kind !== 'note' }); check() }
     }
+  }
+  // Carry independently stored empty collections into the new key generation.
+  const originalCatalog = await getDocFromServer(doc(database, 'users', uid, 'catalog', 'collections')); check()
+  if (migration.phase !== 'complete' && originalCatalog.exists() && originalCatalog.data().payload) {
+    const definitions = await decryptJson(oldKey, originalCatalog.data().payload, 'collections'); check()
+    const payload = await encryptJson(key, definitions, 'collections'); check()
+    await securityCall('migrationCatalog', { payload, sourceRevision: originalCatalog.data().revision }); check()
+    const result = await securityCall<{ payload: import('./crypto').EncryptedPayload }>('migrationCatalogStatus'); check()
+    const verified = await decryptJson(key, result.payload, 'collections'); check()
+    if (JSON.stringify(definitions) !== JSON.stringify(verified)) throw new Error('Collection migration verification failed. Originals were preserved.')
   }
   progress('Verifying the manifest and finalizing the active generation…')
   let done = false

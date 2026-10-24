@@ -32,6 +32,7 @@ vi.mock('firebase-functions/params', () => ({
   defineString: (name: string) => ({ value: () => name === 'AUTH_SESSION_MINUTES' ? mocks.minutes : ({ OWNER_EMAIL: 'owner@example.com', RP_ID: 'localhost', EXPECTED_ORIGIN: 'http://localhost:5173' }[name]) }),
   defineBoolean: () => ({ value: () => false }),
 }))
+vi.mock('firebase-functions/v2/storage', () => ({ onObjectFinalized: (_options: unknown, handler: unknown) => handler }));
 vi.mock('firebase-functions/v2/https', async original => ({
   ...await original<typeof import('firebase-functions/v2/https')>(),
   onCall: (_options: unknown, handler: unknown) => handler,
