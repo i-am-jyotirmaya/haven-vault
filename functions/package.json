@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test lib/policy.test.js"
+    "test": "npm run build && node --test lib/policy.test.js lib/security-policy.test.js"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.0",

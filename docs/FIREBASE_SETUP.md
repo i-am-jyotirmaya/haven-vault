@@ -106,7 +106,7 @@ For Functions discovery timeouts, set `FUNCTIONS_DISCOVERY_TIMEOUT=60`: PowerShe
 
 Review Firebase's permission prompts, including Storage's cross-service Firestore access. The configuration includes indexes and TTL fields. Expired sessions are denied immediately even before TTL cleanup. Google sign-in is enabled in Console rather than by this command.
 
-The seven callable services permit public HTTP invocation so browsers can begin authentication. Handlers still enforce owner identity, passkey signatures, challenges, and sessions. This does not make database or bucket data public. Public endpoints may receive unsolicited traffic and consume quota.
+The ten callable services permit public HTTP invocation so browsers can begin authentication. Handlers still enforce owner identity, passkey signatures, challenges, and sessions. This does not make database or bucket data public. Public endpoints may receive unsolicited traffic and consume quota.
 
 ## 5. Inspect and configure cloud access
 
@@ -130,7 +130,7 @@ node scripts/configure-callable-access.cjs --apply
 | Helper | Changes |
 | --- | --- |
 | Cloud access | Enables IAM Credentials API if needed; grants runtime `roles/iam.serviceAccountTokenCreator` on itself; adds `roles/datastore.user` if no recognized Firestore role exists; grants Storage service agent `roles/firebaserules.firestoreServiceAgent`; configures exact-origin GET/HEAD/OPTIONS CORS |
-| Callable access | Adds `allUsers` with `roles/run.invoker` to only the seven vault services, preserving other bindings |
+| Callable access | Adds `allUsers` with `roles/run.invoker` to only the ten vault services, preserving other bindings |
 
 **The cloud-access helper replaces the bucket's current CORS list.** Use a dedicated bucket. Neither helper grants public object access or relaxes vault rules. The callable helper repairs private invocation policies that can remain after a failed initial deployment.
 
@@ -158,13 +158,13 @@ Optionally configure function build-image retention with Firebase's `functions:a
 4. Create and confirm a strong unique passphrase, at least 12 characters. Keep an independent secure copy.
 5. Upload a non-sensitive fixture. Verify preview, download, Lock vault, and passphrase-only unlock on each intended device. Verify Sign out from both the locked and unlocked screens, expiry while locked, and background/resume behavior.
 
-After signing out, visits use **Sign in with passkey**, then the passphrase. The OS may synchronize passkeys; Haven does not manage synchronization. Google alone cannot replace a registered passkey. Losing the passphrase strands ciphertext, and losing every usable passkey blocks normal sign-in. There is no recovery UI.
+After signing out, visits use **Sign in with passkey**, then the passphrase. The OS may synchronize passkeys; Haven does not manage synchronization. Google alone cannot replace a registered passkey. Without a usable passphrase or recovery kit, content recovery is impossible; losing every usable passkey blocks normal sign-in. A configured recovery kit plus fresh verification of the registered owner Google account can replace lost passkeys; a passkey or that recovery flow separately authorizes local recovery from a forgotten passphrase. See [recovery and upgrade instructions](RECOVERY_UPGRADE.md).
 
 ## Updates and backups
 
 Keep independent originals. This version has no complete encrypted export/import tool. A manually designed backup must preserve vault configuration, encrypted metadata, encrypted Storage objects, and the identifiers used by encryption contexts. Copying files alone is insufficient. Test restores before relying on them.
 
-For upgrades, review changes, install from both lockfiles, run checks, and deploy changed components explicitly. For separate locking/sign-out, deploy Functions first: verification now returns authoritative session timing and the frontend uses `validateVaultSession` for read-only owner/expiry/revocation checks. Deploy Hosting afterward; no vault-data migration is needed. Changes to encryption formats, context strings, salts, or hostnames need a migration plan. Never reset backend records as routine troubleshooting.
+For upgrades, review changes, install from both lockfiles, run checks, and deploy changed components explicitly. For separate locking/sign-out, deploy Functions first: verification now returns authoritative session timing and the frontend uses `validateVaultSession` for owner/expiry/revocation checks and last-activity tracking. Deploy Hosting afterward. V2 vaults use the versioned master-key design; existing vaults explicitly migrate from Security after deployment. Changes to encryption formats, context strings, salts, or hostnames need a migration plan. Never reset backend records as routine troubleshooting.
 
 ## Local deployment commands
 
@@ -207,6 +207,6 @@ These commands reuse the locally installed, locked Firebase CLI and your own sig
 
 Set `AUTH_SESSION_MINUTES=60` in `functions/.env.<project-id>` (see `functions/.env.example`). The only supported values are `15`, `30`, and `60`; omitted means `60`. Invalid values fail deployment-plan validation and new session issuance. Redeploy Functions to apply it to **new** passkey sessions. Existing sessions retain their original persisted expiry and issued lifetime, even if the new value is longer.
 
-Deploy **Functions before Hosting** when upgrading this version: verification and `validateVaultSession` now return the issued lifetime alongside server time/expiry. Rules continue to check the original server record independently of refreshed Firebase tokens. No encryption/data migration or rule relaxation is needed.
+Deploy **Functions before Hosting** when upgrading this version: verification and `validateVaultSession` now return the issued lifetime alongside server time/expiry. Rules continue to check the original server record independently of refreshed Firebase tokens. V2 key management requires the new Functions and generation rules; legacy ciphertext stays readable and migration is explicitly user-initiated. No automatic migration is performed by deployment.
 
 Use `pnpm deploy:plan` to validate the environment, then `pnpm deploy:cloud` for the checked local-command deployment. Local Security settings affect only background/inactivity locking, never the backend lifetime. The effective issued lifetime appears after authentication; the client ends access approximately 15 seconds early, plus request latency, rather than extending it.

@@ -1,9 +1,43 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "_vaultSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "uid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "revoked",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
   "fieldOverrides": [
-    { "collectionGroup": "_vaultChallenges", "fieldPath": "expiresAt", "ttl": true, "indexes": [] },
-    { "collectionGroup": "_vaultSessions", "fieldPath": "expiresAt", "ttl": true, "indexes": [] },
-    { "collectionGroup": "_vaultLimits", "fieldPath": "expiresAt", "ttl": true, "indexes": [] },
-    { "collectionGroup": "items", "fieldPath": "payload", "indexes": [] }
+    {
+      "collectionGroup": "_vaultChallenges",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "_vaultSessions",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "_vaultLimits",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "items",
+      "fieldPath": "payload",
+      "indexes": []
+    }
   ]
 }

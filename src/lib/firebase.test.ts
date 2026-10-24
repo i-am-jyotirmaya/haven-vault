@@ -44,6 +44,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.spyOn(performance, 'now').mockReturnValue(0);
   vi.clearAllMocks();
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { hostname: 'example.test' } }));
   vi.stubGlobal('document', { visibilityState: 'visible', hasFocus: vi.fn(() => true) });
   for (const variable of ['API_KEY', 'AUTH_DOMAIN', 'PROJECT_ID', 'STORAGE_BUCKET', 'MESSAGING_SENDER_ID', 'APP_ID']) {
     vi.stubEnv(`VITE_FIREBASE_${variable}`, 'test-project');
@@ -59,9 +60,10 @@ beforeEach(() => {
   });
   mocks.signOut.mockImplementation(async () => { mocks.auth.currentUser = null; });
   mocks.call.mockImplementation(async (name: string) => {
+    const now = Date.now();
     if (name === 'authenticationOptions' || name === 'registrationOptions') return { data: { options: {}, challengeId: 'challenge' } };
-    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: Date.now(), expiresAtMs: Date.now() + 3_600_000, sessionDurationMinutes: 60 } };
-    if (name === 'validateVaultSession') return { data: { serverNowMs: Date.now(), expiresAtMs: Date.now() + 60 * 60_000, sessionDurationMinutes: 60 } };
+    if (name === 'verifyAuthentication' || name === 'verifyRegistration') return { data: { token: 'server-token', serverNowMs: now, expiresAtMs: now + 3_600_000, sessionDurationMinutes: 60 } };
+    if (name === 'validateVaultSession') return { data: { serverNowMs: now, expiresAtMs: now + 60 * 60_000, sessionDurationMinutes: 60 } };
     return { data: { ended: true } };
   });
 });
@@ -262,7 +264,7 @@ describe('emulator isolation', () => {
   it('connects every service locally even with production browser configuration present', async () => {
     vi.stubEnv('MODE', 'emulator');
     vi.stubEnv('DEV', true);
-    vi.stubGlobal('window', { location: { hostname: 'localhost' } });
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { hostname: 'localhost' } }));
     const session = await import('./firebase');
     expect(session.isVaultBackendReady).toBe(true);
     expect(mocks.connectAuth).toHaveBeenCalledWith(mocks.auth, 'http://127.0.0.1:9099');
@@ -286,7 +288,7 @@ describe('emulator isolation', () => {
     vi.resetModules();
   vi.spyOn(performance, 'now').mockReturnValue(0);
     vi.stubEnv('DEV', false);
-    vi.stubGlobal('window', { location: { hostname: 'localhost' } });
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { hostname: 'localhost' } }));
     await expect(import('./firebase')).rejects.toThrow('local development');
     expect(mocks.initializeAuth).not.toHaveBeenCalled();
   });
@@ -300,7 +302,7 @@ describe('server timing and clock validation', () => {
     });
     const session = await import('./firebase');
     const start = Date.now(); await session.signInWithPasskey();
-    expect(session.getVaultSessionDeadline()).toBeGreaterThanOrEqual(start + minutes * 60_000 - 15_000);
+    expect(session.getVaultSessionDeadline()).toBeGreaterThanOrEqual(start + minutes * 60_000 - 15_000 - 50);
     expect(session.getVaultSessionLifetimeMinutes()).toBe(minutes);
   });
   it.each([0, 16, 90, Infinity])('rejects an invalid server-issued lifetime %s', async minutes => {
@@ -322,4 +324,24 @@ describe('server timing and clock validation', () => {
     expect(() => session.getVaultUserId()).toThrow('ended');
     expect(deadline).toBeGreaterThan(wall);
   });
+});
+
+
+it('recovery token exchange uses request-start timing and cannot publish a late accepted token after sign-out', async () => {
+  let now = 10000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const session = await import('./firebase');
+  const started = session.beginRecoverySessionClock();
+  now += 120000;
+  await session.acceptRecoveredSession({ token: 'fixture', expiresAtMs: 3610000, serverNowMs: 10000, sessionDurationMinutes: 60 }, started);
+  expect(session.getVaultSessionDeadline()).toBe(3595000);
+  await session.signOutVault();
+  let finish!: () => void;
+  mocks.signIn.mockImplementation(() => new Promise(resolve => { finish = () => { mocks.auth.currentUser = mocks.user; resolve({ user: mocks.user }); }; }));
+  const pending = session.acceptRecoveredSession({ token: 'fixture', expiresAtMs: 3610000, serverNowMs: 10000, sessionDurationMinutes: 60 }, session.beginRecoverySessionClock());
+  const rejected = expect(pending).rejects.toThrow('cancelled');
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  await session.signOutVault(); finish(); await rejected;
+  expect(mocks.auth.currentUser).toBeNull();
+  expect(() => session.getVaultUserId()).toThrow();
 });

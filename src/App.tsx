@@ -51,7 +51,7 @@ import {
   Circle,
 } from "lucide-react";
 import { demoItems, formatBytes, type DisplayItem } from "./demo";
-import { createVault, unlockVault, type VaultConfig } from "./lib/crypto";
+import { unlockVault, type VaultConfig } from "./lib/crypto";
 import {
   enrollPasskey,
   isFirebaseConfigured,
@@ -79,6 +79,9 @@ import {
 import { lockVaultState, sessionDeadline, type VaultState } from "./lib/vaultState";
 import { clearPlaintext, createPlaintextUrl, revokePlaintextUrl } from "./lib/plaintext";
 import { useVaultPolicy } from "./lib/useVaultPolicy";
+import { createKeyRecord } from './lib/keys';
+import SecurityCenter from './components/SecurityCenter';
+import Recovery from './components/Recovery';
 import SecuritySettings from "./components/SecuritySettings";
 import Modal from "./components/Modal";
 import Preview from "./components/Preview";
@@ -166,6 +169,7 @@ export default function App() {
   const [deleteItem, setDeleteItem] = useState<DisplayItem | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [recoveryActive, setRecoveryActive] = useState(false);
   const [enrollmentStep, setEnrollmentStep] = useState<"confirm" | "registering" | null>(null);
   const enrollmentAction = useRef<{ start: () => void; cancel: () => void } | null>(null);
   const [progress, setProgress] = useState("");
@@ -194,6 +198,7 @@ export default function App() {
   }, [toast]);
   const clearSensitiveState = useCallback(() => {
     generationRef.current++;
+    setRecoveryActive(false);
     clearPlaintext();
     setItems([]);
     setPreviewId(null);
@@ -236,7 +241,11 @@ export default function App() {
   }, [clearSensitiveState, transition, notify]);
   const lock = useCallback((message = "") => {
     // Locking invalidates encryption work only, never a passkey ceremony/session.
-    if (stateRef.current.status === "signed-out") return;
+    if (stateRef.current.status === "signed-out") {
+      clearSensitiveState();
+      if (message) notify("Recovery was cleared. Start again with your saved kit.");
+      return;
+    }
     clearSensitiveState();
     transition(lockVaultState(stateRef.current));
     if (message) notify(message);
@@ -255,16 +264,18 @@ export default function App() {
 
   const policy = useVaultPolicy({
     expiresAt: deadline,
-    unlocked: vaultState.status === "unlocked" || demo,
+    unlocked: vaultState.status === "unlocked" || demo || recoveryActive,
     authenticated: !!deadline,
     lock, expire: endSession,
     conceal: (background) => {
       clearPlaintext();
       setPreviewId(null);
-      // Cancel local passphrase derivation/drafts without cancelling WebAuthn.
-      if (background && stateRef.current.status === "locked") clearSensitiveState();
+      // Cancel ordinary unlock drafts immediately. An open recovery workflow
+      // follows the configured grace/idle policy, including native UI hiding.
+      if (background && stateRef.current.status === "locked" && !recoveryActive) clearSensitiveState();
     },
     validate: async () => {
+      if (stateRef.current.status !== "locked" && stateRef.current.status !== "unlocked") return;
       const current = authenticationGeneration.current;
       await validateVaultSession();
       if (current !== authenticationGeneration.current) return;
@@ -280,11 +291,12 @@ export default function App() {
   [policy.evaluate]);
   const canUseVault = () => canRevealContent() &&
     (stateRef.current.status === "unlocked" || stateRef.current.status === "demo");
+  const recoveryGeneration = generationRef.current;
   const privacyScreen = createPortal(<div className="privacy-screen" role="status" aria-live="polite" aria-hidden={!policy.concealed}>
     <strong>Haven is concealed</strong>
-    <span>Checking your secure session before showing content.</span>
+    <span>Your content is hidden while Haven is inactive. Return here to continue.</span>
     <div className="privacy-actions">
-      <button className="button secondary" disabled={vaultState.status === "signed-out"} onClick={() => lock()}>Lock now</button>
+      <button className="button secondary" disabled={vaultState.status === "signed-out" && !recoveryActive} onClick={() => lock()}>Lock now</button>
       <button className="button secondary" onClick={() => endSession()}>Sign out now</button>
     </div>
   </div>, document.body);
@@ -451,7 +463,7 @@ export default function App() {
       let key: CryptoKey;
       let encryptionConfig: VaultConfig;
       if (config === null) {
-        const created = await createVault(secret);
+        const created = await createKeyRecord(secret);
         if (!workIsCurrent(current, false)) return;
         await saveVaultConfig(created.config);
         key = created.key;
@@ -611,7 +623,7 @@ export default function App() {
     const current = generationRef.current;
     setBusy(true);
     try {
-      if (!demo) await permanentlyDeleteVaultItem(deleteItem);
+      if (!demo) await permanentlyDeleteVaultItem(deleteItem, vaultKey!);
       if (!workIsCurrent(current)) return;
       setItems((values) => values.filter((item) => item.id !== deleteItem.id));
       setDeleteItem(null);
@@ -724,7 +736,7 @@ export default function App() {
 
   if (screen !== "vault")
     return (
-      <div className="auth-layout">
+      <div id="sensitive-surface" className="auth-layout" inert={policy.concealed || undefined}>
         {privacyScreen}
         {policy.warning && <SessionWarning />}
         <aside className="auth-story">
@@ -914,6 +926,9 @@ export default function App() {
                 </button>
               </form>
             )}
+            <Recovery key={`recovery-${generationRef.current}-${vaultState.status}`} authenticated={vaultState.status === 'locked'} onActive={setRecoveryActive}
+              check={() => { if (recoveryGeneration !== generationRef.current || !canRevealContent()) throw new Error('Return to Haven to continue recovery.'); }}
+              onFailure={handleVaultError} onComplete={() => endSession('Recovery complete. Sign in and unlock with your new passphrase.')} />
             {deadline > 0 && securitySettings}
             <div className="auth-reassurance">
               <LockKeyhole size={13} /> Your passphrase is never stored or shared.
@@ -963,7 +978,7 @@ export default function App() {
   );
 
   return (
-    <div className="app-shell">
+    <div id="sensitive-surface" className="app-shell" inert={policy.concealed || undefined}>
       {privacyScreen}
       {policy.warning && <SessionWarning />}
       {mobileNav && <div className="nav-overlay" onClick={() => setMobileNav(false)} />}
@@ -1107,6 +1122,7 @@ export default function App() {
           </div>
         </header>
         <main className="main-content">
+          {!demo && vaultState.status === 'unlocked' && vaultState.config.version === 2 && !vaultState.config.recovery && <div className="setup-notice" role="status"><span><strong>Recovery setup incomplete.</strong> Save and confirm a recovery kit in Security. Without a usable passphrase or recovery kit, content recovery is impossible.</span><button className="button secondary" onClick={() => openSection('Security')}>Set up recovery</button></div>}
           {section === "Security" ? (
             <>
               <div className="page-heading">
@@ -1129,11 +1145,16 @@ export default function App() {
                   icon={<KeyRound />}
                   step="02"
                   title="Your passphrase holds the key"
-                  text="AES-256-GCM encryption protects your files, filenames, and notes. Only your passphrase can derive the key that decrypts them."
+                  text="AES-256-GCM encryption protects your files, filenames, and notes. Your passphrase or configured recovery kit unlocks the local master key."
                   status={demo ? "Preview · sample data" : "Vault decrypted in memory"}
                 />
               </section>
               {securitySettings}
+              {!demo && vaultState.status === 'unlocked' && <SecurityCenter config={vaultState.config} vaultKey={vaultState.key}
+                check={() => { if (!canUseVault()) throw new Error('Unlock the vault to continue.'); }}
+                onFailure={handleVaultError} onEndSession={() => endSession('This session was revoked.')}
+                onChanged={(config, key) => { const state = stateRef.current; if (state.status === 'unlocked') transition({ ...state, config, key }); }} />}
+
               <div className="security-details">
                 <h2>The little details that keep you safe</h2>
                 {[
@@ -1157,9 +1178,9 @@ export default function App() {
                   },
                   {
                     icon: <KeyRound />,
-                    title: "No passphrase recovery",
+                    title: "Recovery must be configured",
                     description:
-                      "Keep a strong passphrase somewhere safe. Haven cannot reset it to recover your files.",
+                      "Configure and protect a recovery kit. Without a usable passphrase or kit, content recovery is impossible.",
                   },
                 ].map((detail) => (
                   <div className="security-detail" key={detail.title}>

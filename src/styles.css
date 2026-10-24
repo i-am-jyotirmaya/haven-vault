@@ -410,3 +410,21 @@ html[data-haven-concealed] .privacy-screen {
 .session-warning { position: fixed; z-index: 100; top: 8px; left: 5%; right: 5%; padding: 12px 20px; border-radius: 8px; background: #fff0c2; color: #47350a; box-shadow: 0 2px 10px #0002; font-size: 14px; }
 
 .privacy-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+
+.security-center { margin: 24px 0; padding: 24px; border: 1px solid var(--line, #d8ded0); border-radius: 16px; background: var(--surface, #fff); color: #27342b; }
+.security-center h2, .security-center h3 { margin: 16px 0 12px; }
+.security-center p { line-height: 1.6; margin: 12px 0; }
+.security-center label { display: block; margin: 14px 0; font-size: 14px; }
+.security-center input, .security-center textarea { display: block; width: 100%; border: 1px solid #c6cdbf; border-radius: 8px; padding: 10px; margin-top: 6px; background: #fff; color: #27342b; }
+.security-center textarea { min-height: 110px; }
+.security-center .button { margin: 4px 8px 4px 0; white-space: normal; }
+.access-row { border-top: 1px solid #d8ded0; padding: 16px 0; }
+.access-row > strong, .access-row > span { display: block; margin-bottom: 6px; overflow-wrap: anywhere; }
+.recovery-confirm { border: 2px solid #a2b58c; border-radius: 12px; padding: 16px; margin: 16px 0; }
+.security-panel { margin: 24px 0; padding: 18px; border: 1px solid #d8ded0; border-radius: 12px; }
+.security-feedback { margin: 14px 0; padding: 14px 16px; border: 1px solid #c7d6df; border-radius: 10px; background: #f0f6fa; color: #253e4e; scroll-margin: 28px; }
+.security-feedback p { margin: 6px 0 0; }
+.security-feedback.success { background: #edf7ed; color: #214c2c; border-color: #a3c9aa; }
+.security-feedback.error { background: #fff1ef; color: #7b2924; border-color: #dda29c; }
+.security-feedback:focus, .recovery-confirm h3:focus { outline: 2px solid #72915c; outline-offset: 4px; }
+@media(max-width:590px) { .security-center { padding: 16px; } .security-panel { padding: 14px; } }

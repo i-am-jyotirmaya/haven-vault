@@ -38,5 +38,5 @@ jobs:
           VITE_VAULT_BACKEND_READY: 'true'
       - run: pnpm test:config
       - run: pnpm test:backend
-      - run: pnpm test:rules
+      - run: pnpm test:local
       - run: pnpm build

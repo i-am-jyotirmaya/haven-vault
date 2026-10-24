@@ -14,14 +14,41 @@ service firebase.storage {
       let session = firestore.get(/databases/(default)/documents/_vaultSessions/$(sessionId)).data;
       return session.uid == uid && session.revoked == false && session.expiresAt > request.time;
     }
+    // Exactly two Firestore documents per request: the session and this Admin-only
+    // generation authority. Storage cannot read a third document in one evaluation.
+    function legacyWrites(uid) {
+      return !firestore.exists(/databases/(default)/documents/_vaultAccess/$(uid));
+    }
+    function activeGeneration(uid, generation) {
+      return firestore.get(/databases/(default)/documents/_vaultAccess/$(uid)).data.generation == generation;
+    }
+    function readableGeneration(uid, generation) {
+      let authority = firestore.get(/databases/(default)/documents/_vaultAccess/$(uid)).data;
+      return authority.generation == generation || authority.migrationGeneration == generation;
+    }
+    function staging(uid, generation) {
+      let authority = firestore.get(/databases/(default)/documents/_vaultAccess/$(uid)).data;
+      return authority.migrationPhase == 'staging' && authority.migrationGeneration == generation
+        && authority.migrationSessionId == request.auth.token.vaultSession;
+    }
     match /vaults/{uid}/{itemId} {
-      allow get, delete: if liveSession(uid);
-      allow create: if resource == null && liveSession(uid)
+      allow get: if liveSession(uid);
+      allow delete: if liveSession(uid) && legacyWrites(uid);
+      allow create: if resource == null && liveSession(uid) && legacyWrites(uid)
         && itemId.matches('^[A-Za-z0-9_-]{1,128}$')
         && request.resource.size >= 29
         && request.resource.size <= 50 * 1024 * 1024 + 29
         && request.resource.contentType == 'application/octet-stream';
       // File objects are immutable; edits create a new randomly named object.
+      allow update, list: if false;
+    }
+    match /generations/{uid}/{generation}/{itemId} {
+      allow get: if liveSession(uid) && readableGeneration(uid, generation);
+      allow create: if resource == null && liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation))
+        && itemId.matches('^[a-f0-9-]{36}$') && request.resource.size >= 29
+        && request.resource.size <= 50 * 1024 * 1024 + 29
+        && request.resource.contentType == 'application/octet-stream';
+      allow delete: if liveSession(uid) && activeGeneration(uid, generation);
       allow update, list: if false;
     }
     match /{allPaths=**} {

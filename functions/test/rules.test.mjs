@@ -142,6 +142,7 @@ test("even an active session cannot read or write backend authority records", as
     "_vaultChallenges/fake",
     "_vaultCredentials/fake",
     "_vaultLimits/fake",
+    "_vaultAccess/owner",
   ]) {
     await assertFails(getDoc(doc(context.firestore(), path)));
     await assertFails(setDoc(doc(context.firestore(), path), { uid: owner, revoked: false }));
@@ -175,4 +176,35 @@ test("freshly refreshed Firebase claims cannot revive an expired private session
   await assertFails(getDoc(doc(freshToken.firestore(), 'users/owner/items/private')));
   await assertFails(getBytes(ref(freshToken.storage(), 'vaults/owner/private')));
   await assertFails(setDoc(doc(freshToken.firestore(), 'users/owner/items/refreshed'), { payload: envelope }));
+});
+
+
+test("generation authority freezes old clients and restricts staging to its claiming session", async () => {
+  const generation = "11111111-1111-4111-8111-111111111111";
+  const id = "22222222-2222-4222-8222-222222222222";
+  const otherId = "G".repeat(43);
+  const context = environment.authenticatedContext(owner, claims());
+  const other = environment.authenticatedContext(owner, claims(otherId));
+  await environment.withSecurityRulesDisabled(async admin => {
+    await setDoc(doc(admin.firestore(), "_vaultSessions", otherId), { uid: owner, expiresAt: Timestamp.fromMillis(Date.now() + 600000), revoked: false });
+    await setDoc(doc(admin.firestore(), "users/owner/vault/config"), configuration);
+    await setDoc(doc(admin.firestore(), "users/owner/vault/migration"), { phase: "staging", sessionId: liveId, record: { generation } });
+    await setDoc(doc(admin.firestore(), "_vaultAccess/owner"), { generation: null, migrationGeneration: generation, migrationPhase: "staging", migrationSessionId: liveId });
+  });
+  await assertFails(setDoc(doc(context.firestore(), "users/owner/items/frozen"), { payload: envelope }));
+  await assertFails(uploadBytes(ref(context.storage(), `vaults/owner/${id}`), cipherBytes, cipherMetadata));
+  const path = `users/owner/generations/${generation}/items/${id}`;
+  const object = `generations/owner/${generation}/${id}`;
+  await assertFails(setDoc(doc(other.firestore(), path), { payload: { ...envelope, version: 2 } }));
+  await assertFails(uploadBytes(ref(other.storage(), object), cipherBytes, cipherMetadata));
+  await assertSucceeds(setDoc(doc(context.firestore(), path), { payload: { ...envelope, version: 2 } }));
+  await assertSucceeds(uploadBytes(ref(context.storage(), object), cipherBytes, cipherMetadata));
+  await assertFails(deleteObject(ref(context.storage(), object)));
+  await assertFails(setDoc(doc(context.firestore(), path), { payload: { ...envelope, version: 2 } }));
+  await environment.withSecurityRulesDisabled(async admin => {
+    await setDoc(doc(admin.firestore(), "users/owner/vault/migration"), { phase: "verifying", sessionId: liveId, record: { generation } });
+    await setDoc(doc(admin.firestore(), "_vaultAccess/owner"), { generation: null, migrationGeneration: generation, migrationPhase: "verifying", migrationSessionId: liveId });
+  });
+  await assertSucceeds(getBytes(ref(context.storage(), object)));
+  await assertFails(uploadBytes(ref(context.storage(), `generations/owner/${generation}/33333333-3333-4333-8333-333333333333`), cipherBytes, cipherMetadata));
 });

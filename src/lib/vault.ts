@@ -1,3 +1,5 @@
+import { keyContext, validateKeyRecord } from './keys'
+import { securityCall } from './security'
 import {
   collection as firestoreCollection,
   deleteDoc,
@@ -81,7 +83,7 @@ function validateId(id: string) {
 function validatePayload(value: unknown): asserts value is EncryptedPayload {
   if (
     !isRecord(value) ||
-    value.version !== 1 ||
+    ![1, 2].includes(Number(value.version)) ||
     typeof value.iv !== 'string' ||
     typeof value.ciphertext !== 'string' ||
     value.ciphertext.length > MAX_METADATA_CIPHERTEXT_CHARS
@@ -165,14 +167,16 @@ async function makeThumbnail(file: File): Promise<string | undefined> {
   }
 }
 
-function itemReference(uid: string, id: string) {
+function itemReference(uid: string, id: string, key: CryptoKey) {
   validateId(id)
-  return doc(requireDatabase(), 'users', uid, 'items', id)
+  const binding = keyContext(key)
+  return binding ? doc(requireDatabase(), 'users', uid, 'generations', binding.generation, 'items', id) : doc(requireDatabase(), 'users', uid, 'items', id)
 }
 
-function fileReference(uid: string, id: string) {
+function fileReference(uid: string, id: string, key: CryptoKey) {
   validateId(id)
-  return ref(requireStorage(), `vaults/${uid}/${id}`)
+  const binding = keyContext(key)
+  return ref(requireStorage(), binding ? `generations/${uid}/${binding.generation}/${id}` : `vaults/${uid}/${id}`)
 }
 
 function isMissingObject(error: unknown) {
@@ -192,6 +196,8 @@ export async function getVaultConfig(): Promise<VaultConfig | null> {
   const snapshot = await getDocFromServer(doc(requireDatabase(), 'users', uid, 'vault', 'config'))
   if (!snapshot.exists()) return null
   const config: unknown = snapshot.data()
+  if (isRecord(config) && ![1, 2].includes(Number(config.version))) throw new Error('Unsupported vault version. Update Haven to a compatible client; do not reset the configuration. Restore a compatible encrypted generation if needed.')
+  if (isRecord(config) && config.version === 2) { validateKeyRecord(config as unknown as import("./keys").KeyRecord); return config as unknown as VaultConfig }
   if (
     !isRecord(config) ||
     config.version !== 1 ||
@@ -206,6 +212,7 @@ export async function getVaultConfig(): Promise<VaultConfig | null> {
 }
 
 export async function saveVaultConfig(config: VaultConfig): Promise<void> {
+  if (config.version === 2) { await securityCall('createKeys', { record: config }); return }
   const uid = getVaultUserId()
   const database = requireDatabase()
   const configRef = doc(database, 'users', uid, 'vault', 'config')
@@ -221,7 +228,7 @@ export async function saveVaultConfig(config: VaultConfig): Promise<void> {
 
 export async function listVaultItems(key: CryptoKey): Promise<VaultItem[]> {
   const uid = getVaultUserId()
-  const snapshot = await getDocsFromServer(firestoreCollection(requireDatabase(), 'users', uid, 'items'))
+  const snapshot = await getDocsFromServer(firestoreCollection(requireDatabase(), ...(keyContext(key) ? ['users', uid, 'generations', keyContext(key)!.generation, 'items'] : ['users', uid, 'items']) as [string, ...string[]]))
   const items = await Promise.all(snapshot.docs.map(async (entry) => {
     const record = entry.data()
     validateId(entry.id)
@@ -272,13 +279,13 @@ export async function uploadVaultFile(
     new Uint8Array(plaintext).fill(0)
   }
   const payload = await encryptMetadata(key, item)
-  const fileRef = fileReference(uid, id)
+  const fileRef = fileReference(uid, id, key)
   await uploadBytes(fileRef, encrypted, {
     contentType: 'application/octet-stream',
     cacheControl: 'private, no-store, max-age=0',
   })
   try {
-    await setDoc(itemReference(uid, id), { payload })
+    await setDoc(itemReference(uid, id, key), { payload })
   } catch (metadataError) {
     try {
       await deleteObject(fileRef)
@@ -321,7 +328,7 @@ export async function saveVaultNote(
     text,
   }
   const payload = await encryptMetadata(key, item)
-  await setDoc(itemReference(uid, item.id), { payload })
+  await setDoc(itemReference(uid, item.id, key), { payload })
   return item
 }
 
@@ -330,14 +337,14 @@ export async function updateVaultItem(key: CryptoKey, item: VaultItem): Promise<
   const updated = { ...item, updatedAt: Math.max(Date.now(), item.createdAt) }
   validateItem(updated, item.id)
   const payload = await encryptMetadata(key, updated)
-  await setDoc(itemReference(uid, item.id), { payload })
+  await setDoc(itemReference(uid, item.id, key), { payload })
 }
 
 export async function downloadVaultFile(key: CryptoKey, item: VaultItem): Promise<Blob> {
   const uid = getVaultUserId()
   validateItem(item, item.id)
   if (item.kind === 'note') throw new Error('Notes do not have an attached file.')
-  const encrypted = await getBlob(fileReference(uid, item.id), MAX_ENCRYPTED_FILE_SIZE)
+  const encrypted = await getBlob(fileReference(uid, item.id, key), MAX_ENCRYPTED_FILE_SIZE)
   const plaintext = await decryptFile(key, encrypted, `file:${item.id}`)
   try {
     if (plaintext.byteLength !== item.size) {
@@ -349,17 +356,17 @@ export async function downloadVaultFile(key: CryptoKey, item: VaultItem): Promis
   }
 }
 
-export async function permanentlyDeleteVaultItem(item: VaultItem): Promise<void> {
+export async function permanentlyDeleteVaultItem(item: VaultItem, key: CryptoKey): Promise<void> {
   const uid = getVaultUserId()
   validateItem(item, item.id)
   if (!item.trashed) throw new Error('Move this item to the trash before deleting it permanently.')
   if (item.kind !== 'note') {
     try {
-      await deleteObject(fileReference(uid, item.id))
+      await deleteObject(fileReference(uid, item.id, key))
     } catch (error) {
       if (!isMissingObject(error)) throw error
     }
   }
   // Delete metadata last so a partial deletion remains visible and retryable.
-  await deleteDoc(itemReference(uid, item.id))
+  await deleteDoc(itemReference(uid, item.id, key))
 }

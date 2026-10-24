@@ -14,11 +14,25 @@ service cloud.firestore {
       let session = get(/databases/$(database)/documents/_vaultSessions/$(sessionId)).data;
       return session.uid == uid && session.revoked == false && session.expiresAt > request.time;
     }
+    function legacyWrites(uid) {
+      return !exists(/databases/$(database)/documents/users/$(uid)/vault/migration)
+        && (!exists(/databases/$(database)/documents/users/$(uid)/vault/config)
+          || get(/databases/$(database)/documents/users/$(uid)/vault/config).data.version == 1);
+    }
+    function activeGeneration(uid, generation) {
+      let config = get(/databases/$(database)/documents/users/$(uid)/vault/config).data;
+      return config.version == 2 && config.generation == generation;
+    }
+    function staging(uid, generation) {
+      let migration = get(/databases/$(database)/documents/users/$(uid)/vault/migration).data;
+      return migration.phase == 'staging' && migration.record.generation == generation
+        && migration.sessionId == request.auth.token.vaultSession;
+    }
     function encrypted(payload) {
       return payload is map
         && payload.keys().hasOnly(['version', 'iv', 'ciphertext'])
         && payload.keys().hasAll(['version', 'iv', 'ciphertext'])
-        && payload.version == 1
+        && payload.version in [1, 2]
         && payload.iv is string && payload.iv.size() == 16
         && payload.iv.matches('^[A-Za-z0-9+/]{16}$')
         && payload.ciphertext is string
@@ -37,17 +51,30 @@ service cloud.firestore {
     }
     match /users/{uid}/vault/config {
       allow get: if liveSession(uid);
-      allow create: if liveSession(uid) && validConfig(request.resource.data);
+      allow create: if liveSession(uid) && legacyWrites(uid) && validConfig(request.resource.data);
       // Changing this without re-encrypting every object would lose the vault.
       allow update, delete, list: if false;
     }
     match /users/{uid}/items/{itemId} {
-      allow read, delete: if liveSession(uid);
-      allow create, update: if liveSession(uid)
+      allow read: if liveSession(uid);
+      allow delete: if liveSession(uid) && legacyWrites(uid);
+      allow create, update: if liveSession(uid) && legacyWrites(uid)
         && itemId.matches('^[A-Za-z0-9_-]{1,128}$')
         && request.resource.data.keys().hasOnly(['payload'])
         && request.resource.data.keys().hasAll(['payload'])
-        && encrypted(request.resource.data.payload);
+        && encrypted(request.resource.data.payload) && request.resource.data.payload.version == 1;
+    }
+    match /users/{uid}/generations/{generation}/items/{itemId} {
+      allow read: if liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation)
+        || get(/databases/$(database)/documents/users/$(uid)/vault/migration).data.record.generation == generation);
+      allow create: if liveSession(uid) && (activeGeneration(uid, generation) || staging(uid, generation))
+        && itemId.matches('^[a-f0-9-]{36}$')
+        && request.resource.data.keys().hasOnly(['payload'])
+        && encrypted(request.resource.data.payload) && request.resource.data.payload.version == 2;
+      allow update: if liveSession(uid) && activeGeneration(uid, generation)
+        && request.resource.data.keys().hasOnly(['payload'])
+        && encrypted(request.resource.data.payload) && request.resource.data.payload.version == 2;
+      allow delete: if liveSession(uid) && activeGeneration(uid, generation);
     }
     // Challenge, credential, owner, session and rate-limit records are Admin SDK only.
     match /{document=**} {

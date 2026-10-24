@@ -46,6 +46,7 @@ Follow the [Firebase setup guide](docs/FIREBASE_SETUP.md). You need a dedicated 
 | [Firebase setup](docs/FIREBASE_SETUP.md) | Installation, environment files, permissions, deployment, and first use |
 | [Architecture and integration](docs/ARCHITECTURE.md) | Modules, authentication, storage format, and customization |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Passkeys, permissions, CORS, and browser warnings |
+| [Recovery and upgrade](docs/RECOVERY_UPGRADE.md) | Recovery kits, migrations, passphrase changes, session management and rollback |
 | [Security](SECURITY.md) | Threat model, recovery limits, and vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Development and validation |
 | [Third-party notices](THIRD_PARTY_NOTICES.md) | Image and dependency licenses |
