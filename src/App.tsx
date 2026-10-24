@@ -402,6 +402,7 @@ export default function App() {
     }
     const current = ++authenticationGeneration.current;
     const work = generationRef.current;
+    let passkeyAccepted = false;
     setBusy(true);
     setError("");
     try {
@@ -435,6 +436,7 @@ export default function App() {
       }));
       else await signInWithPasskey();
       if (current !== authenticationGeneration.current) return;
+      passkeyAccepted = true;
       const expiresAt = getVaultSessionDeadline();
       transition({ status: "locked", expiresAt, config: undefined });
       const config = await getVaultConfig();
@@ -445,7 +447,20 @@ export default function App() {
       setConfirmPassphrase("");
     } catch (err) {
       if (current === authenticationGeneration.current) {
-        if (isAuthenticationFailure(err)) { handleVaultError(err); return; }
+        if (isAuthenticationFailure(err)) {
+          // A permission denial during bootstrap is not evidence that an
+          // existing session expired. Keep the failing step and server reason
+          // visible after the same fail-closed cleanup used for sign-out.
+          const reason = errorMessage(err);
+          const code = (err as { code?: unknown } | null)?.code;
+          const diagnostic = typeof code === 'string' && /^(functions\/|auth\/)?[a-z-]+$/.test(code)
+            ? ` (${code})` : '';
+          endSession();
+          setError(passkeyAccepted
+            ? `Your passkey was accepted, but Haven could not load your vault. ${reason}${diagnostic} Check the deployed Firebase functions, rules and project configuration before trying again.`
+            : `${enroll ? 'Passkey setup' : 'Passkey sign-in'} failed: ${reason}${diagnostic} Try the passkey registered for this vault on its original website.`);
+          return;
+        }
         const message = errorMessage(err);
         setError(
           message.includes("internal") ||

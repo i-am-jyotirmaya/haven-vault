@@ -18,6 +18,30 @@ Confirm `RP_ID` matches the hostname and `EXPECTED_ORIGIN` the exact origin. Cre
 
 Supply all browser configuration values, deploy Functions and both rule sets, verify permissions, then set `VITE_VAULT_BACKEND_READY=true`, rebuild, and redeploy Hosting. Vite embeds configuration at build time.
 
+## Fingerprint succeeds, then sign-in fails
+
+The device accepting a fingerprint means it authorized the passkey locally;
+Haven still has to verify the signed response, exchange the session token and
+read the encrypted vault configuration. Older clients report every permission
+denial during these steps as “Your secure session ended. Sign in again.” That
+message alone does not establish that the session expired.
+
+Updated clients keep the failing stage, server reason and error code visible:
+
+- **Passkey sign-in failed:** use the passkey registered for this vault on the
+  original canonical hostname. Check `RP_ID` and `EXPECTED_ORIGIN` if verification
+  fails. Do not delete passkeys, owner records or encryption configuration.
+- **Your passkey was accepted, but Haven could not load your vault:** check that
+  Hosting, Functions, Auth and Firestore use the same Firebase project and that
+  the matching session-aware rules and Functions are deployed. Inspect the
+  specific failure through the project administrator; do not make rules public.
+
+The client still clears local authorization on a bootstrap authorization failure.
+Existing-session expiry and revocation retain their normal sign-out behavior.
+When reporting a failure, share the displayed stage/code and browser/device,
+never tokens, passphrases, vault contents or credential responses. This feedback
+fix does not repair an unverified production configuration or deploy changes.
+
 ## Google sign-in or owner verification fails
 
 Enable the Google provider and add Hosting/auth hostnames to authorized domains. Confirm `OWNER_EMAIL` in `functions/.env.<actual-project-id>` and redeploy Functions. First enrollment requires a recent verified matching Google identity; after enrollment, Google alone intentionally cannot add a passkey.

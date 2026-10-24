@@ -88,6 +88,50 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('authentication and local encryption transitions', () => {
+  it.each(['functions/permission-denied', 'unauthenticated'])('preserves a sign-in rejection instead of claiming expiry (%s)', async code => {
+    mocks.signIn.mockRejectedValueOnce(Object.assign(new Error('Passkey authentication could not be verified. Start again.'), { code }));
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with passkey' }));
+    await flush();
+    expect(screen.getByRole('alert').textContent).toContain('Passkey sign-in failed: Passkey authentication could not be verified. Start again.');
+    expect(screen.getByRole('alert').textContent).toContain(code);
+    expect(screen.queryByText('Your secure session ended. Sign in again.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in with passkey' })).toBeTruthy();
+    expect(mocks.getConfig).not.toHaveBeenCalled();
+    expect(mocks.authenticated).toBe(false);
+    expect(mocks.signOut).toHaveBeenCalledOnce();
+  });
+
+  it('distinguishes a vault-read denial after successful passkey authentication', async () => {
+    mocks.getConfig.mockRejectedValueOnce(Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }));
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with passkey' }));
+    await flush();
+    expect(screen.getByRole('alert').textContent).toContain('Your passkey was accepted, but Haven could not load your vault. Missing or insufficient permissions. (permission-denied)');
+    expect(screen.queryByText('Your secure session ended. Sign in again.')).toBeNull();
+    expect(mocks.authenticated).toBe(false);
+    expect(mocks.unlock).not.toHaveBeenCalled();
+    expect(mocks.signOut).toHaveBeenCalledOnce();
+    // A fresh attempt remains possible; the failure did not leave busy set.
+    await authenticate();
+    expect(mocks.signIn).toHaveBeenCalledTimes(2);
+  });
+
+  it('a late sign-in rejection cannot replace feedback after explicit sign-out', async () => {
+    let rejectSignIn!: (error: Error) => void;
+    mocks.signIn.mockReturnValueOnce(new Promise<void>((_resolve, reject) => { rejectSignIn = reject; }));
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with passkey' }));
+    hide();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out now' }));
+    await act(async () => rejectSignIn(Object.assign(new Error('Passkey verification failed.'), { code: 'functions/permission-denied' })));
+    show(); await flush();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mocks.getConfig).not.toHaveBeenCalled();
+    expect(mocks.authenticated).toBe(false);
+    expect(mocks.signOut).toHaveBeenCalledOnce();
+  });
+
   it('passkey authenticates with no decrypted content; local passphrase unlocks without another ceremony', async () => {
     render(<App />); await authenticate();
     expect(screen.queryByText(file.name)).toBeNull();
