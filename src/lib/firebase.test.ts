@@ -67,7 +67,13 @@ beforeEach(() => {
     return { data: { ended: true } };
   });
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  // Native prompt closing-focus timers must settle against their own mock window,
+  // before another test replaces globals or resets the module registry.
+  const { clearCredentialPrompts } = await import('./credentialPrompt');
+  clearCredentialPrompts();
+  vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 
 describe('vault authentication lifecycle', () => {
   it('waits for a fresh click after the Google popup and starts registration synchronously from that click', async () => {

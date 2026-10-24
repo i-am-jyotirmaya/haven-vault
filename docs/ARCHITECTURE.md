@@ -48,6 +48,12 @@ Passkey authentication enters the locked state; existing vaults require their pa
 
 Absolute authentication expiry applies even while locked or concealed. Confirmed authorization failures sign out; transient validation failures lock and allow an explicit retry. Firestore/Storage rules independently enforce each data request. Revocation does not push an instant notification to an idle foreground browser: the next server access/validation discovers it, and the original deadline always applies.
 
+Sign-in bootstrap reports authorization errors by stage: a rejected passkey/session
+exchange is distinct from a denied vault-configuration read after authentication.
+Both clear local authorization, but preserve the server reason and error code in
+the sign-in alert. They do not claim an existing session expired. No diagnostic
+logging or authorization/rule relaxation is added.
+
 ### Concealment and automatic locking
 
 | Policy | Default | Choices / owner |
