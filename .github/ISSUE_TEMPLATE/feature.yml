@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement to Haven Vault.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the change you want. Do not include passphrases, credentials, private files, or exploit details. Report vulnerabilities privately as described in SECURITY.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change, and how would you use it?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other approaches you considered.
+    validations:
+      required: false
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security
+      options:
+        - label: This request does not include secrets or a vulnerability. I will report security issues privately as described in SECURITY.md.
+          required: true

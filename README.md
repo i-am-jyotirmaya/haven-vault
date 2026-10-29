@@ -1,5 +1,8 @@
 # Haven Vault
 
+[![Validate](https://github.com/i-am-jyotirmaya/haven-vault/actions/workflows/ci.yml/badge.svg)](https://github.com/i-am-jyotirmaya/haven-vault/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A self-hosted, single-owner vault for photos, documents, and notes. A device passkey controls access to Firebase; a separate passphrase decrypts your data in the browser.
 
 Built with React, TypeScript, Vite, Firebase, SimpleWebAuthn, and the Web Crypto API. Released under the [MIT license](LICENSE); bundled third-party images retain their own license.
@@ -86,6 +89,10 @@ pnpm build
 Rules tests require Java 21+ and download Firebase emulators on first use. They use the disposable demo-haven-vault project. Use `pnpm test:local` for the complete disposable emulator integration suite; `pnpm dev:local` connects the frontend automatically.
 
 Tests cover encryption, authentication lifecycle, backend policy, deployment configuration, and Firestore/Storage authorization. Verify real passkey enrollment and live encrypted upload/download on your own devices. Passing tests is not an independent security audit.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, required checks, and how to propose a change.
 
 ## License
 
