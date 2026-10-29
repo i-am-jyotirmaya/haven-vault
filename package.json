@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.2.2",
-    "firebase": "^12.0.0",
+    "firebase": "^13.1.0",
     "lucide-react": "^0.468.0",
     "pdfjs-dist": "^5.7.284",
     "react": "^19.2.0",
