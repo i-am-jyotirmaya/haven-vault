@@ -83,6 +83,7 @@ import { createKeyRecord } from './lib/keys';
 import SecurityCenter from './components/SecurityCenter';
 import Recovery from './components/Recovery';
 import SecuritySettings from "./components/SecuritySettings";
+import ItemMenu from "./components/ItemMenu";
 import Modal from "./components/Modal";
 import Preview from "./components/Preview";
 
@@ -1466,10 +1467,7 @@ export default function App() {
                                 <MoreHorizontal size={18} />
                               </button>
                               {menuId === item.id && (
-                                <div
-                                  className="item-menu"
-                                  onClick={(event) => event.stopPropagation()}
-                                >
+                                <ItemMenu>
                                   <button
                                     onClick={() => {
                                       setPreviewId(item.id);
@@ -1524,7 +1522,7 @@ export default function App() {
                                       Move to trash
                                     </button>
                                   )}
-                                </div>
+                                </ItemMenu>
                               )}
                             </div>
                           </div>
