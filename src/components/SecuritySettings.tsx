@@ -6,7 +6,7 @@ export default function SecuritySettings({ preferences, onChange, lifetimeMinute
 }) {
   return <details className="security-settings">
     <summary>Automatic locking settings</summary>
-    <p>Content is always concealed immediately when Haven is backgrounded. Concealment covers filenames, thumbnails, notes, search, and dialogs. It cannot reliably prevent screenshots captured by your browser or operating system.</p>
+    <p>Content is concealed immediately when you leave the tab or the window loses focus. Menus and dialogs are covered too. Opening a system list or file picker does not count as leaving, and coming back shows the vault again instead of leaving a menu or dialog stuck behind the privacy screen. This cannot reliably prevent screenshots taken by your browser or operating system.</p>
     <p>During a nonzero background grace period, the encryption key and decrypted vault data remain in memory so you can return without another prompt. Locking clears the key and decrypted state. Choose Immediately to clear them as soon as you leave.</p>
     <label>Lock after backgrounding
       <select value={preferences.backgroundSeconds} onChange={event => onChange({ ...preferences, backgroundSeconds: Number(event.target.value) as LockPreferences['backgroundSeconds'] })}>

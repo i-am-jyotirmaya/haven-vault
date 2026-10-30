@@ -3,6 +3,22 @@ import { flushSync } from 'react-dom'
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { LockPolicy, readLockPreferences, writeLockPreferences, parseLockPreferences, type LockPreferences } from './lockPolicy'
 
+/** Chrome on iOS blurs the window while opening a system picker. The blur is
+ * dispatched with the gesture, so this only covers that handoff. It does not
+ * delay pagehide, freeze, or a visibility change that outlasts the gesture. */
+export const NATIVE_PICKER_BLUR_MS = 1000
+const NATIVE_PICKER_INPUT = /^(file|date|time|datetime-local|month|week|color)$/
+
+export function isNativePickerTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false
+  const label = target.closest('label')
+  const control = target.closest('select, input')
+    ?? (label instanceof HTMLLabelElement ? label.control : null)
+    ?? label?.querySelector('select, input')
+  if (control instanceof HTMLSelectElement) return true
+  return control instanceof HTMLInputElement && NATIVE_PICKER_INPUT.test(control.type)
+}
+
 export function useVaultPolicy(options: {
   expiresAt: number; unlocked: boolean; authenticated: boolean
   lock: (message?: string) => void; expire: (message?: string) => void
@@ -37,6 +53,9 @@ export function useVaultPolicy(options: {
     let disposed = false
     let checking = false
     let focusLost = false
+    let nativePickerUntil = 0
+    let pickerHideTimer: ReturnType<typeof setTimeout> | undefined
+    const cancelPickerHide = () => { clearTimeout(pickerHideTimer); pickerHideTimer = undefined }
     const conceal = () => {
       // Synchronous CSS/inert gate includes top-layer dialogs, before React commits.
       document.documentElement.dataset.havenConcealed = 'true'
@@ -100,26 +119,57 @@ export function useVaultPolicy(options: {
       }
     }
     const visibility = () => {
-      if (document.visibilityState !== 'visible') hide()
-      else {
-        if (document.hasFocus()) focusLost = false
+      if (document.visibilityState !== 'visible') {
+        // A system picker can mark the document hidden for the opening gesture
+        // without the user leaving. Wait out that gesture, then conceal if the
+        // tab is actually still hidden. pagehide and freeze do not wait.
+        if (nativePickerUntil > model.now()) {
+          cancelPickerHide()
+          const delay = Math.max(0, nativePickerUntil - model.now())
+          pickerHideTimer = setTimeout(() => {
+            pickerHideTimer = undefined
+            if (disposed || document.visibilityState === 'visible') return
+            nativePickerUntil = 0
+            hide()
+          }, delay)
+          return
+        }
+        cancelPickerHide()
+        hide()
+      } else {
+        cancelPickerHide()
+        // Foreground again. Chrome on iOS often omits focus, and hasFocus()
+        // stays false while a menu, dialog, or picker is open. A visible
+        // document is back; a still-visible blurred window never takes this path.
+        focusLost = false
         void resume()
       }
     }
-    const pagehide = () => hide()
+    const suspend = () => { cancelPickerHide(); nativePickerUntil = 0; hide() }
     const blur = () => {
+      // Lock a visible window that lost focus (another window in front).
+      // A system picker blurs the window too, sometimes after it has already
+      // toggled visibility. Ignore that blur and let the gesture timer, pagehide,
+      // or freeze decide. Credential UI keeps its own visible-tab exception.
+      if (nativePickerUntil > model.now()) return
       if (document.visibilityState === 'visible' && credentialPromptActive()) return
       focusLost = true
       hide()
     }
     const focus = () => { focusLost = false; void resume() }
-    const pageshow = () => { if (document.hasFocus()) focusLost = false; void resume() }
+    const pageshow = () => {
+      if (document.visibilityState === 'visible' || document.hasFocus()) focusLost = false
+      void resume()
+    }
     const promptChanged = () => {
       if (credentialPromptActive() || document.visibilityState !== 'visible') return
       if (document.hasFocus()) { focusLost = false; void resume() }
       else { focusLost = true; hide() }
     }
     const activity = (event: Event) => {
+      if ((event.type === 'keydown' || event.type === 'pointerdown' || event.type === 'touchstart') && isNativePickerTarget(event.target)) {
+        nativePickerUntil = model.now() + NATIVE_PICKER_BLUR_MS
+      }
       if (document.visibilityState !== 'visible') return
       if (document.documentElement.dataset.havenConcealed) {
         // A trusted tap can restore a mobile browser that reports visibility but
@@ -148,12 +198,12 @@ export function useVaultPolicy(options: {
     const events = ['keydown', 'pointerdown', 'pointermove', 'touchstart', 'touchmove', 'wheel']
     events.forEach(event => window.addEventListener(event, activity, { passive: true, capture: true }))
     document.addEventListener('visibilitychange', visibility)
-    document.addEventListener('freeze', hide)
+    document.addEventListener('freeze', suspend)
     document.addEventListener('resume', focus)
     window.addEventListener('blur', blur)
     window.addEventListener('focus', focus)
     window.addEventListener(CREDENTIAL_PROMPT_EVENT, promptChanged)
-    window.addEventListener('pagehide', pagehide)
+    window.addEventListener('pagehide', suspend)
     window.addEventListener('pageshow', pageshow)
     if (document.visibilityState !== 'visible') hide()
     else { reveal(); schedule() }
@@ -161,16 +211,17 @@ export function useVaultPolicy(options: {
       disposed = true
       ++resumeGeneration
       clearTimeout(timer)
+      cancelPickerHide()
       clearInterval(poll)
       scheduler.current = () => {}
       events.forEach(event => window.removeEventListener(event, activity, true))
       document.removeEventListener('visibilitychange', visibility)
-      document.removeEventListener('freeze', hide)
+      document.removeEventListener('freeze', suspend)
       document.removeEventListener('resume', focus)
       window.removeEventListener('blur', blur)
       window.removeEventListener('focus', focus)
       window.removeEventListener(CREDENTIAL_PROMPT_EVENT, promptChanged)
-      window.removeEventListener('pagehide', pagehide)
+      window.removeEventListener('pagehide', suspend)
       window.removeEventListener('pageshow', pageshow)
       delete document.documentElement.dataset.havenConcealed
       document.getElementById('sensitive-surface')?.removeAttribute('inert')
